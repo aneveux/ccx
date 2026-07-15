@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ master ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ master ]
   schedule:
     - cron: '0 6 * * 1'
 
@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git-changelist-maven-extension needs the full commit count
 
       - uses: actions/setup-java@v4
         with:
@@ -24,14 +26,14 @@ jobs:
           java-version: 25
           cache: maven
 
-      - name: Run tests
-        run: mvn verify -B
+      - name: Run tests (incremental version)
+        run: mvn verify -B -Dset.changelist -Dignore.dirt
 
   native-smoke:
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'schedule' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
       (github.event_name == 'pull_request' && (
         contains(github.event.pull_request.changed_files, 'src/main/java/me/neveux/ccx/graal') ||
         contains(github.event.pull_request.changed_files, 'src/main/resources/META-INF/native-image') ||
@@ -39,12 +41,14 @@ jobs:
       ))
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git-changelist-maven-extension needs the full commit count
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
           distribution: 'graalvm-community'
       - name: Build native image (smoke test)
-        run: mvn -Pnative package -DskipTests -B
+        run: mvn -Pnative package -DskipTests -B -Dset.changelist -Dignore.dirt
       - name: Upload native smoke artifact
         uses: actions/upload-artifact@v4
         with:

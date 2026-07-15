@@ -6,7 +6,7 @@
 
     <groupId>me.neveux</groupId>
     <artifactId>ccx</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>${revision}${changelist}</version>
     <packaging>jar</packaging>
 
     <name>ccx</name>
@@ -35,6 +35,11 @@
     </scm>
 
     <properties>
+        <!-- CI-friendly version — the git-changelist-maven-extension rewrites ${changelist}
+             to -rc<commitcount>.<sha> when built with -Dset.changelist (see .mvn/). A plain
+             local build resolves to ${revision}${changelist} = 0.1.0-SNAPSHOT. -->
+        <revision>0.1.0</revision>
+        <changelist>-SNAPSHOT</changelist>
         <java.version>25</java.version>
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
@@ -228,7 +233,7 @@
                                 </goals>
                                 <configuration>
                                     <systemPropertyVariables>
-                                        <native.image.path>${project.build.directory}/${project.build.finalName}-runner</native.image.path>
+                                        <native.image.path>${project.build.directory}/ccx-runner</native.image.path>
                                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                                         <maven.home>${maven.home}</maven.home>
                                     </systemPropertyVariables>
@@ -263,7 +268,7 @@
                                         <owner>aneveux</owner>
                                         <name>ccx</name>
                                         <changelog>
-                                            <preset>conventional-commits</preset>
+                                            <preset>gitmoji</preset>
                                         </changelog>
                                     </github>
                                 </release>
