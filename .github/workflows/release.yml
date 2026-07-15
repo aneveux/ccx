@@ -51,4 +51,4 @@ jobs:
       - name: JReleaser full release
         run: mvn -Prelease jreleaser:full-release -B -Dset.changelist
         env:
-          JRELEASER_GITHUB_TOKEN: ${{ secrets.JRELEASER_GITHUB_TOKEN }}
+          JRELEASER_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
