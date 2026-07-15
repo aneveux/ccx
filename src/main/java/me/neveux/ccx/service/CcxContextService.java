@@ -1,0 +1,207 @@
+package me.neveux.ccx.service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import me.neveux.ccx.config.ObjectMapperConfig;
+import me.neveux.ccx.model.CcxContext;
+import me.neveux.ccx.model.ProfileDriftState;
+import me.neveux.ccx.model.Settings;
+import me.neveux.ccx.util.FileUtils;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Manages the {@code .ccx/context.json} lock file in a project directory.
+ *
+ * <p>The context file records which profiles are currently enabled, each with a snapshot
+ * of the resources they contributed (plugins, rules, fragments, etc.) and the timestamp
+ * when they were enabled. This lets ccx perform accurate drift detection and safe
+ * profile removal without re-reading the marketplace.
+ *
+ * <p>All writes are atomic via {@link me.neveux.ccx.util.FileUtils#atomicWrite}.
+ */
+@ApplicationScoped
+public class CcxContextService {
+
+    private static final Logger log = LoggerFactory.getLogger(CcxContextService.class);
+
+    private final ObjectMapper mapper;
+    private final ClaudeMdService claudeMdService;
+
+    public CcxContextService() {
+        this.mapper = ObjectMapperConfig.defaultJson();
+        this.claudeMdService = new ClaudeMdService();
+    }
+
+    @Inject
+    public CcxContextService(@Named("jsonMapper") ObjectMapper mapper, ClaudeMdService claudeMdService) {
+        this.mapper = mapper;
+        this.claudeMdService = claudeMdService;
+    }
+
+    /**
+     * Reads the context file from {@code <projectRoot>/.ccx/context.json}. Returns an
+     * empty context (no enabled profiles) if the file does not exist or cannot be parsed.
+     *
+     * @param projectRoot root directory of the project
+     * @return the current context; never null
+     */
+    public CcxContext read(Path projectRoot) {
+        var contextFile = projectRoot.resolve(".ccx/context.json");
+        if (!Files.exists(contextFile)) {
+            log.debug("context file absent path={}", contextFile);
+            return new CcxContext("1", Map.of());
+        }
+        try {
+            var ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
+            log.debug("context loaded path={}", contextFile);
+            return ctx;
+        } catch (IOException e) {
+            log.warn("failed to read context path={} — returning empty context", contextFile, e);
+            return new CcxContext("1", Map.of());
+        }
+    }
+
+    /**
+     * Writes {@code ctx} to {@code <projectRoot>/.ccx/context.json} atomically.
+     *
+     * @param ctx         the context to persist
+     * @param projectRoot root directory of the project
+     * @throws ConfigWriteException if the file cannot be written
+     */
+    public void write(CcxContext ctx, Path projectRoot) {
+        var ccxDir = projectRoot.resolve(".ccx");
+        var contextFile = ccxDir.resolve("context.json");
+        try {
+            FileUtils.atomicWrite(contextFile, tmp -> mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), ctx));
+            log.debug("context written path={}", contextFile);
+        } catch (IOException e) {
+            throw new ConfigWriteException("Failed to write context to " + contextFile, e);
+        }
+    }
+
+    /**
+     * Adds or updates the enabled-profile entry for {@code profileName}, recording the
+     * supplied snapshot and the current timestamp.
+     *
+     * @param profileName the profile being enabled
+     * @param snapshot    the resources contributed by the profile
+     * @param projectRoot root directory of the project
+     * @throws IOException if the context file cannot be read or written
+     */
+    public void recordEnabled(String profileName, CcxContext.ProfileSnapshot snapshot, Path projectRoot) throws IOException {
+        var contextFile = projectRoot.resolve(".ccx/context.json");
+        CcxContext ctx;
+        if (!Files.exists(contextFile)) {
+            ctx = new CcxContext("1", Map.of());
+        } else {
+            ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
+        }
+        var profiles = new HashMap<>(ctx.enabledProfiles());
+        profiles.put(profileName, new CcxContext.ProfileRecord(Instant.now(), snapshot));
+        write(new CcxContext(ctx.version(), profiles), projectRoot);
+        log.debug("profile recorded as enabled name={}", profileName);
+    }
+
+    /**
+     * Removes the enabled-profile entry for {@code profileName} from the context file.
+     * Has no effect if the profile was not recorded as enabled.
+     *
+     * @param profileName the profile being disabled
+     * @param projectRoot root directory of the project
+     * @throws IOException if the context file cannot be read or written
+     */
+    public void recordDisabled(String profileName, Path projectRoot) throws IOException {
+        var contextFile = projectRoot.resolve(".ccx/context.json");
+        CcxContext ctx;
+        if (!Files.exists(contextFile)) {
+            ctx = new CcxContext("1", Map.of());
+        } else {
+            ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
+        }
+        var profiles = new HashMap<>(ctx.enabledProfiles());
+        profiles.remove(profileName);
+        write(new CcxContext(ctx.version(), profiles), projectRoot);
+        log.debug("profile recorded as disabled name={}", profileName);
+    }
+
+    /**
+     * Detects drift for a single profile by comparing the recorded snapshot against the
+     * live {@code settings.json} and the current {@code <!-- ccx:begin -->} block in
+     * {@code .claude/CLAUDE.md}.
+     *
+     * @param profileName  the profile to check
+     * @param recorded     the snapshot recorded when the profile was last enabled; may be null
+     * @param liveSettings the current {@code settings.json} content
+     * @param claudeDir    the project's {@code .claude/} directory
+     * @return {@link me.neveux.ccx.model.ProfileDriftState#DISABLED} if {@code recorded} is null,
+     *         {@link me.neveux.ccx.model.ProfileDriftState#ALTERED} if a plugin or rule is missing,
+     *         {@link me.neveux.ccx.model.ProfileDriftState#ENABLED} otherwise
+     */
+    public ProfileDriftState detectDrift(String profileName, CcxContext.ProfileSnapshot recorded, Settings liveSettings, Path claudeDir) {
+        // claudeDir is the .claude/ directory; CLAUDE.md is now inside .claude/
+        var claudeMd = claudeDir.resolve("CLAUDE.md");
+        var markerLines = claudeMdService.readMarkerBlock(claudeMd);
+        return detectDrift(profileName, recorded, liveSettings, claudeDir, markerLines);
+    }
+
+    /**
+     * Variant of {@link #detectDrift(String, CcxContext.ProfileSnapshot, Settings, Path)}
+     * that accepts pre-read marker-block lines, avoiding a redundant file read when the
+     * caller has already loaded them.
+     *
+     * @param profileName  the profile to check
+     * @param recorded     the snapshot recorded when the profile was last enabled; may be null
+     * @param liveSettings the current {@code settings.json} content
+     * @param claudeDir    the project's {@code .claude/} directory
+     * @param markerLines  lines currently inside the {@code <!-- ccx:begin -->} block
+     * @return {@link me.neveux.ccx.model.ProfileDriftState#DISABLED},
+     *         {@link me.neveux.ccx.model.ProfileDriftState#ALTERED}, or
+     *         {@link me.neveux.ccx.model.ProfileDriftState#ENABLED}
+     */
+    public ProfileDriftState detectDrift(String profileName, CcxContext.ProfileSnapshot recorded, Settings liveSettings, Path claudeDir, List<String> markerLines) {
+        if (recorded == null) {
+            return ProfileDriftState.DISABLED;
+        }
+
+        // Check plugins
+        if (recorded.plugins() != null) for (var plugin : recorded.plugins()) {
+            if (liveSettings.enabledPlugins() == null || !Boolean.TRUE.equals(liveSettings.enabledPlugins().get(plugin))) {
+                log.debug("drift detected: plugin absent profileName={} plugin={}", profileName, plugin);
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
+        // Check rules
+        if (recorded.rules() != null) for (var rule : recorded.rules()) {
+            if (!Files.exists(claudeDir.resolve("rules/" + rule + ".md"))) {
+                log.debug("drift detected: rule file absent profileName={} rule={}", profileName, rule);
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
+        // Check fragments — each recorded fragment must have @absPath in the marker block
+        if (recorded.fragments() != null && !recorded.fragments().isEmpty()) {
+            for (var absPath : recorded.fragments()) {
+                var expected = "@" + absPath;
+                if (!markerLines.contains(expected)) {
+                    log.debug("drift detected: fragment absent from ccx block profileName={} fragment={}", profileName, absPath);
+                    return ProfileDriftState.ALTERED;
+                }
+            }
+        }
+
+        return ProfileDriftState.ENABLED;
+    }
+
+}

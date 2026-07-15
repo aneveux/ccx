@@ -1,0 +1,767 @@
+package me.neveux.ccx.service;
+
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import me.neveux.ccx.model.CcxContext;
+import me.neveux.ccx.model.Permissions;
+import me.neveux.ccx.model.Profile;
+import me.neveux.ccx.model.ProfilePlugins;
+import me.neveux.ccx.model.ProfileRules;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DisplayName("ProfileApplyService")
+class ProfileApplyServiceTest {
+
+    private ProfileApplyService service;
+    private ProfileService profileService;
+    private SettingsService settingsService;
+
+    @TempDir
+    Path tempDir;
+
+    @TempDir
+    Path ccxConfigDir;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        var javaProfileDir = ccxConfigDir.resolve("profiles/java");
+        Files.createDirectories(javaProfileDir);
+        Files.writeString(javaProfileDir.resolve("profile.yaml"),
+            "metadata:\n  name: java\n  description: Java/Maven projects\nplugins:\n  enable:\n    - java@claude-java-stack\nrules:\n  files:\n    - java\n");
+        var yamlMapper = new ObjectMapper(new YAMLFactory());
+        yamlMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        yamlMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
+        Files.createDirectories(javaProfileDir.resolve("rules"));
+        Files.writeString(javaProfileDir.resolve("rules/java.md"), "# Java rules\nDo Java things.\n");
+        profileService = new ProfileService(yamlMapper, new CcxConfigService(ccxConfigDir));
+        service = new ProfileApplyService(new SettingsService(), new ClaudeMdService(),
+            new PluginMapService(), new CcxConfigService(ccxConfigDir));
+        settingsService = new SettingsService();
+    }
+
+    private me.neveux.ccx.model.Profile resolvedJavaProfile() {
+        return profileService.loadAndResolve("java");
+    }
+
+    // -----------------------------------------------------------------------
+    // apply()
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("apply()")
+    class Apply {
+
+        @Test
+        @DisplayName("should write plugins to .claude/settings.json")
+        void apply_writesPluginsToSettings() throws Exception {
+            var resolved = resolvedJavaProfile();
+
+            service.apply(resolved, tempDir);
+
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            assertThat(settingsFile)
+                .as(".claude/settings.json must be created by apply")
+                .exists();
+            var content = Files.readString(settingsFile);
+            assertThat(content)
+                .as("settings.json must contain the java@ plugin from the java profile")
+                .contains("java@claude-java-stack");
+        }
+
+        @Test
+        @DisplayName("should install rules files to .claude/rules/")
+        void apply_installsRulesFiles() throws Exception {
+            var resolved = resolvedJavaProfile();
+
+            service.apply(resolved, tempDir);
+
+            var ruleFile = tempDir.resolve(".claude/rules/java.md");
+            assertThat(ruleFile)
+                .as(".claude/rules/java.md must be created by apply for the java profile")
+                .exists();
+            assertThat(Files.readString(ruleFile))
+                .as("installed rule file must have non-empty content")
+                .isNotBlank();
+        }
+
+        @Test
+        @DisplayName("should not overwrite an existing rule file when overwrite is false")
+        void apply_skipsExistingRuleFile_whenOverwriteFalse() throws Exception {
+            var rulesDir = tempDir.resolve(".claude/rules");
+            Files.createDirectories(rulesDir);
+            var ruleFile = rulesDir.resolve("testing.md");
+            Files.writeString(ruleFile, "custom content");
+
+            var rules = new ProfileRules(List.of("testing"));
+            var profile = new Profile()
+                .withRules(rules);
+
+            service.apply(profile, tempDir, false);
+
+            assertThat(Files.readString(ruleFile))
+                .as("apply with overwrite=false must not overwrite an existing rule file")
+                .isEqualTo("custom content");
+        }
+
+        @Test
+        @DisplayName("should not throw when rules.files contains a null entry (treated as missing resource)")
+        void apply_toleratesNullRuleEntry() {
+            var ruleFiles = new java.util.ArrayList<String>();
+            ruleFiles.add(null);
+            var rules = new ProfileRules(ruleFiles);
+            var profile = new Profile()
+                .withRules(rules);
+
+            // The null entry must be SKIPPED, not turned into a "null.md" path.
+            var snapshot = service.apply(profile, tempDir, false);
+
+            assertThat(snapshot)
+                .as("apply must return a snapshot even when rules.files contains a null entry")
+                .isNotNull();
+            assertThat(snapshot.rules())
+                .as("the null rule entry must be skipped — snapshot must not record any rule (no \"null\" entry)")
+                .doesNotContain("null")
+                .isEmpty();
+            assertThat(tempDir.resolve(".claude/rules/null.md"))
+                .as("a null rule entry must NOT be materialised as a null.md file on disk")
+                .doesNotExist();
+        }
+
+        @Test
+        @DisplayName("should reject a rule name containing path traversal with IllegalArgumentException")
+        void apply_skipsRuleWithTraversalName() {
+            var rules = new ProfileRules(List.of("../../etc/injected"));
+            var profile = new Profile()
+                .withRules(rules);
+
+            // The service must validate rule names and reject traversal attempts
+            // rather than silently skipping them or resolving them outside the rules dir.
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.apply(profile, tempDir, false))
+                .as("apply must throw on a rule name containing path traversal")
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid rule name");
+        }
+
+        @Test
+        @DisplayName("should merge permissions.allow into settings when profile has permissions")
+        void apply_mergesPermissionsToSettings_whenProfileHasPermissions() {
+            var permissions = new Permissions(List.of("Bash(*)"), null);
+            var profile = new Profile()
+                .withPermissions(permissions);
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("settings.permissions must not be null after applying a profile with permissions")
+                .isNotNull();
+            assertThat(settings.permissions().allow())
+                .as("settings.permissions.allow must contain the permission from the profile")
+                .contains("Bash(*)");
+        }
+
+        @Test
+        @DisplayName("should return a snapshot with plugins and rules populated")
+        void apply_returnsPopulatedSnapshot() {
+            var resolved = resolvedJavaProfile();
+
+            var snapshot = service.apply(resolved, tempDir);
+
+            assertThat(snapshot)
+                .as("apply must return a non-null snapshot")
+                .isNotNull();
+            assertThat(snapshot.plugins())
+                .as("snapshot plugins must be non-empty and contain the java plugin")
+                .isNotEmpty()
+                .contains("java@claude-java-stack");
+            assertThat(snapshot.rules())
+                .as("snapshot rules must be non-empty and contain the java rule")
+                .isNotEmpty()
+                .contains("java");
+        }
+
+        @Test
+        @DisplayName("should deploy command files from profile commands/ dir to .claude/commands/")
+        void apply_deploysCommandFilesFromProfileDir() throws Exception {
+            var commandsDir = ccxConfigDir.resolve("profiles/java/commands");
+            Files.createDirectories(commandsDir);
+            Files.writeString(commandsDir.resolve("review.md"), "# Review command\n");
+
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir);
+
+            var deployedCommand = tempDir.resolve(".claude/commands/review.md");
+            assertThat(deployedCommand)
+                .as(".claude/commands/review.md must be created from the profile commands/ dir")
+                .exists();
+            assertThat(Files.readString(deployedCommand))
+                .as("deployed command file must have the expected content")
+                .contains("Review command");
+        }
+
+        @Test
+        @DisplayName("should write env vars from profile to settings.json")
+        void apply_writesEnvVarsToSettings() throws Exception {
+            var env = new java.util.LinkedHashMap<String, String>();
+            env.put("ENABLE_LSP_TOOL", "1");
+            env.put("DEBUG", "true");
+            var profile = new Profile()
+                .withEnv(env);
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.env())
+                .as("settings.env must contain the env vars from the profile")
+                .isNotNull()
+                .containsEntry("ENABLE_LSP_TOOL", "1")
+                .containsEntry("DEBUG", "true");
+        }
+
+        @Test
+        @DisplayName("should append ignore patterns to .claudeignore")
+        void apply_appendsIgnorePatterns() throws Exception {
+            var profile = new Profile()
+                .withIgnore(List.of("target/", ".mvn/"));
+
+            service.apply(profile, tempDir);
+
+            var claudeIgnore = tempDir.resolve(".claudeignore");
+            assertThat(claudeIgnore)
+                .as(".claudeignore must be created when profile has ignore patterns")
+                .exists();
+            var content = Files.readString(claudeIgnore);
+            assertThat(content)
+                .as(".claudeignore must contain target/ pattern")
+                .contains("target/");
+            assertThat(content)
+                .as(".claudeignore must contain .mvn/ pattern")
+                .contains(".mvn/");
+        }
+
+        @Test
+        @DisplayName("should add fragment @path entries to .claude/CLAUDE.md marker block")
+        void apply_addsFragmentPathsToClaudeMd() throws Exception {
+            var fragmentsDir = ccxConfigDir.resolve("profiles/java/claudemd");
+            Files.createDirectories(fragmentsDir);
+            Files.writeString(fragmentsDir.resolve("java-intro.md"), "# Java intro\n");
+
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir);
+
+            var claudeMd = tempDir.resolve(".claude/CLAUDE.md");
+            assertThat(claudeMd).as(".claude/CLAUDE.md must be created").exists();
+            var content = Files.readString(claudeMd);
+            var expectedFragmentPath = fragmentsDir.resolve("java-intro.md").toAbsolutePath().normalize().toString();
+            assertThat(content)
+                .as(".claude/CLAUDE.md must contain @{absoluteFragmentPath} in the ccx block")
+                .contains("@" + expectedFragmentPath);
+        }
+
+        @Test
+        @DisplayName("should not overwrite an existing command file when overwrite is false")
+        void apply_skipsExistingCommandFile_whenOverwriteFalse() throws Exception {
+            var commandsDir = ccxConfigDir.resolve("profiles/java/commands");
+            Files.createDirectories(commandsDir);
+            Files.writeString(commandsDir.resolve("review.md"), "# Profile version\n");
+
+            var targetCommandsDir = tempDir.resolve(".claude/commands");
+            Files.createDirectories(targetCommandsDir);
+            Files.writeString(targetCommandsDir.resolve("review.md"), "# My custom version\n");
+
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir, false);
+
+            assertThat(Files.readString(targetCommandsDir.resolve("review.md")))
+                .as("apply with overwrite=false must not overwrite an existing command file")
+                .isEqualTo("# My custom version\n");
+        }
+
+        @Test
+        @EnabledOnOs(OS.LINUX)
+        @DisplayName("should not deploy a command file whose real path lies outside configDir (symlink guard)")
+        void apply_skipsCommandFileFromSymlinkOutsideConfigDir() throws Exception {
+            // Create a victim file OUTSIDE ccxConfigDir
+            var victim = tempDir.resolve("victim.txt");
+            Files.writeString(victim, "LEAKED CONTENT");
+
+            // Create the commands directory inside the profile
+            var commandsDir = ccxConfigDir.resolve("profiles/java/commands");
+            Files.createDirectories(commandsDir);
+
+            // Create a symlink pointing outside ccxConfigDir
+            var symlinkPath = commandsDir.resolve("evil.md");
+            Files.createSymbolicLink(symlinkPath, victim.toAbsolutePath());
+
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir, true);
+
+            // The guard must prevent deploying the file that points outside configDir
+            var deployed = tempDir.resolve(".claude/commands/evil.md");
+            assertThat(deployed)
+                .as("command file resolving outside configDir via symlink must NOT be deployed")
+                .doesNotExist();
+        }
+
+        @Test
+        @EnabledOnOs(OS.LINUX)
+        @DisplayName("should not write a fragment @path to .claude/CLAUDE.md when fragment resolves outside configDir (symlink guard)")
+        void apply_skipsFragmentFromSymlinkOutsideConfigDir() throws Exception {
+            // Create a secret file OUTSIDE ccxConfigDir
+            var secret = tempDir.resolve("secret.txt");
+            Files.writeString(secret, "SECRET CONTENT");
+
+            // Create the claudemd directory inside the profile
+            var fragmentsDir = ccxConfigDir.resolve("profiles/java/claudemd");
+            Files.createDirectories(fragmentsDir);
+
+            // Create a symlink pointing outside ccxConfigDir
+            var symlinkPath = fragmentsDir.resolve("evil-frag.md");
+            Files.createSymbolicLink(symlinkPath, secret.toAbsolutePath());
+
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir, true);
+
+            // The guard must prevent writing ANY @-reference for a fragment whose real path is outside configDir.
+            // The symlink path itself (evil-frag.md) is within configDir by string, but its real path escapes it.
+            // A proper guard calls toRealPath() before the startsWith(configDir) check.
+            // Without the guard: evil-frag.md IS listed in CLAUDE.md (as @<symlink-path>).
+            // With the guard: evil-frag.md is skipped entirely — no @-line for it.
+            var claudeMd = tempDir.resolve(".claude/CLAUDE.md");
+            var symlinkAbsPath = symlinkPath.toAbsolutePath().normalize().toString();
+            assertThat(Files.readString(claudeMd))
+                .as(".claude/CLAUDE.md must not reference the symlink path whose real path escapes configDir")
+                .doesNotContain(symlinkAbsPath);
+        }
+
+        @Test
+        @DisplayName("should write plugins, env, and permissions all present in settings.json after a single apply")
+        void apply_writesPluginsAndEnvAndPermissionsInSingleCycle() throws Exception {
+            // Env
+            var env = new java.util.LinkedHashMap<String, String>();
+            env.put("MY_VAR", "hello");
+
+            // Permissions
+            var permissions = new Permissions(List.of("Bash(mvn *)"), null);
+
+            var profile = new Profile()
+                .withPlugins(new ProfilePlugins(List.of("my-plugin@test-market")))
+                .withEnv(env)
+                .withPermissions(permissions);
+
+            service.apply(profile, tempDir);
+
+            // Read back settings and assert all three are present simultaneously
+            var settings = settingsService.read(tempDir);
+
+            assertThat(settings.enabledPlugins())
+                .as("settings.enabledPlugins must contain the plugin after apply")
+                .isNotNull()
+                .containsKey("my-plugin@test-market");
+
+            assertThat(settings.env())
+                .as("settings.env must contain MY_VAR=hello after apply")
+                .isNotNull()
+                .containsEntry("MY_VAR", "hello");
+
+            assertThat(settings.permissions())
+                .as("settings.permissions must not be null after apply")
+                .isNotNull();
+            assertThat(settings.permissions().allow())
+                .as("settings.permissions.allow must contain Bash(mvn *) after apply")
+                .contains("Bash(mvn *)");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // .claudeignore bootstrap (migrated from the removed `init` command)
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName(".claudeignore bootstrap on enable")
+    class ClaudeIgnoreBootstrap {
+
+        @Test
+        @DisplayName("should create a default .claudeignore on first enable")
+        void apply_createsDefaultClaudeIgnore_onFirstEnable() throws Exception {
+            var resolved = resolvedJavaProfile();
+
+            service.apply(resolved, tempDir);
+
+            var claudeIgnore = tempDir.resolve(".claudeignore");
+            assertThat(claudeIgnore)
+                .as("first enable must bootstrap a default .claudeignore")
+                .exists();
+            assertThat(Files.readString(claudeIgnore))
+                .as("default .claudeignore must contain the standard ignore entries")
+                .contains("target/")
+                .contains("node_modules/")
+                .contains("*.class");
+        }
+
+        @Test
+        @DisplayName("should not overwrite an existing .claudeignore on a second enable")
+        void apply_doesNotOverwriteExistingClaudeIgnore() throws Exception {
+            var claudeIgnore = tempDir.resolve(".claudeignore");
+            Files.writeString(claudeIgnore, "custom-user-pattern/\n");
+
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir);
+
+            assertThat(Files.readString(claudeIgnore))
+                .as("an existing .claudeignore must be preserved verbatim — never overwritten by bootstrap")
+                .contains("custom-user-pattern/")
+                .doesNotContain("node_modules/");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // remove()
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("remove()")
+    class Remove {
+
+        private CcxContext.ProfileSnapshot applyJavaAndManualSetup() throws Exception {
+            var resolved = resolvedJavaProfile();
+            var snapshot = service.apply(resolved, tempDir);
+
+            // Add a manual plugin that should survive remove
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            var content = Files.readString(settingsFile);
+            // Inject a manual plugin key into the JSON — replace closing brace to add entry
+            var withManual = content.replace("\"enabledPlugins\" : {",
+                "\"enabledPlugins\" : { \"manual-tool@somewhere\": true,");
+            Files.writeString(settingsFile, withManual);
+
+            return snapshot;
+        }
+
+        @Test
+        @DisplayName("should remove only snapshot plugins, leaving manually-added plugins intact")
+        void remove_removesOnlySnapshotPlugins() throws Exception {
+            var snapshot = applyJavaAndManualSetup();
+
+            service.remove(snapshot, tempDir);
+
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            var content = Files.readString(settingsFile);
+            assertThat(content)
+                .as("remove must not delete the manually-added plugin")
+                .contains("manual-tool@somewhere");
+            assertThat(content)
+                .as("remove must delete the snapshot plugin java@claude-java-stack")
+                .doesNotContain("java@claude-java-stack");
+        }
+
+        @Test
+        @DisplayName("should remove only snapshot rules files, leaving other rules intact")
+        void remove_removesOnlySnapshotRulesFiles() throws Exception {
+            var resolved = resolvedJavaProfile();
+            var snapshot = service.apply(resolved, tempDir);
+
+            // Create a manual rule file that should survive
+            var rulesDir = tempDir.resolve(".claude/rules");
+            Files.createDirectories(rulesDir);
+            Files.writeString(rulesDir.resolve("manual.md"), "# Manual rule\n");
+
+            service.remove(snapshot, tempDir);
+
+            assertThat(rulesDir.resolve("manual.md"))
+                .as("remove must not delete rule files not in the snapshot")
+                .exists();
+            assertThat(rulesDir.resolve("java.md"))
+                .as("remove must delete the snapshot rule file java.md")
+                .doesNotExist();
+        }
+
+        @Test
+        @DisplayName("should not remove permissions when disabling a profile — permissions are additive")
+        void remove_doesNotRemovePermissions() {
+            var permissions = new Permissions(List.of("Bash(*)"), null);
+            var profile = new Profile()
+                .withPermissions(permissions);
+
+            var snapshot = service.apply(profile, tempDir);
+            service.remove(snapshot, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after remove — permissions are never removed")
+                .isNotNull();
+            assertThat(settings.permissions().allow())
+                .as("permissions.allow must still contain Bash(*) — remove does not revoke permissions")
+                .contains("Bash(*)");
+        }
+
+        @Test
+        @DisplayName("should remove only snapshot env vars, leaving other env vars intact")
+        void remove_removesOnlySnapshotEnvVars() throws Exception {
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(),
+                java.util.Map.of("ENABLE_LSP_TOOL", "1"),
+                List.of()
+            );
+
+            var settings = settingsService.read(tempDir);
+            var env = new java.util.LinkedHashMap<String, String>();
+            env.put("ENABLE_LSP_TOOL", "1");
+            env.put("MANUAL_VAR", "keep");
+            settings = settings.withEnv(env);
+            settingsService.write(settings, tempDir);
+
+            service.remove(snapshot, tempDir);
+
+            var updated = settingsService.read(tempDir);
+            assertThat(updated.env())
+                .as("MANUAL_VAR must survive remove")
+                .containsEntry("MANUAL_VAR", "keep");
+            assertThat(updated.env())
+                .as("ENABLE_LSP_TOOL must be removed")
+                .doesNotContainKey("ENABLE_LSP_TOOL");
+        }
+
+        @Test
+        @DisplayName("should remove only snapshot ignore patterns, leaving other patterns intact")
+        void remove_removesOnlySnapshotIgnorePatterns() throws Exception {
+            var claudeIgnore = tempDir.resolve(".claudeignore");
+            Files.writeString(claudeIgnore, "target/\n.mvn/\nmanual-pattern/\n");
+
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), null,
+                List.of("target/", ".mvn/")
+            );
+
+            service.remove(snapshot, tempDir);
+
+            var content = Files.readString(claudeIgnore);
+            assertThat(content).as("manual-pattern/ must survive").contains("manual-pattern/");
+            assertThat(content).as("target/ must be removed").doesNotContain("target/");
+            assertThat(content).as(".mvn/ must be removed").doesNotContain(".mvn/");
+        }
+
+        @Test
+        @DisplayName("should remove command files tracked in snapshot")
+        void remove_removesSnapshotCommandFiles() throws Exception {
+            var commandsDir = tempDir.resolve(".claude/commands");
+            Files.createDirectories(commandsDir);
+            Files.writeString(commandsDir.resolve("review.md"), "# Review command\n");
+            Files.writeString(commandsDir.resolve("manual.md"), "# Manual command\n");
+
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of("review"), List.of(), null, List.of()
+            );
+
+            service.remove(snapshot, tempDir);
+
+            assertThat(commandsDir.resolve("review.md")).as("review.md must be removed").doesNotExist();
+            assertThat(commandsDir.resolve("manual.md")).as("manual.md must survive").exists();
+        }
+
+        // -----------------------------------------------------------------------
+        // safe remove overload respects sibling profiles
+        // -----------------------------------------------------------------------
+
+        @Nested
+        @DisplayName("remove(snapshot, projectRoot, context, profileName) — safe overload")
+        class WhenRemovingSafeWithSiblingProfile {
+
+            /**
+             * Build a CcxContext where both profileA and profileB are enabled,
+             * each with their own snapshot, so the safe remove overload can
+             * detect that profileA still claims java@mkt.
+             */
+            private CcxContext contextWithBothEnabled(CcxContext.ProfileSnapshot snapshotA,
+                                                       CcxContext.ProfileSnapshot snapshotB) {
+                var now = java.time.Instant.now();
+                return new me.neveux.ccx.model.CcxContext("1", java.util.Map.of(
+                    "A", new me.neveux.ccx.model.CcxContext.ProfileRecord(now, snapshotA),
+                    "B", new me.neveux.ccx.model.CcxContext.ProfileRecord(now, snapshotB)
+                ));
+            }
+
+            @Test
+            @DisplayName("plugin claimed by a sibling active profile must survive when disabling one profile")
+            void safeRemove_pluginClaimedBySibling_isPreserved() throws Exception {
+                // Profile A: has java@mkt
+                var snapshotA = new CcxContext.ProfileSnapshot(
+                    List.of("java@mkt"), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+                // Profile B (extends A): has both java@mkt (inherited) and cli@mkt (own)
+                var snapshotB = new CcxContext.ProfileSnapshot(
+                    List.of("java@mkt", "cli@mkt"), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+
+                // Write settings with both plugins enabled
+                var settings = settingsService.read(tempDir);
+                var enabledPlugins = new java.util.LinkedHashMap<String, Boolean>();
+                enabledPlugins.put("java@mkt", true);
+                enabledPlugins.put("cli@mkt", true);
+                settings = settings.withEnabledPlugins(enabledPlugins);
+                settingsService.write(settings, tempDir);
+
+                var context = contextWithBothEnabled(snapshotA, snapshotB);
+
+                // Act: disable B using the safe overload
+                service.remove(snapshotB, tempDir, context, "B");
+
+                // Assert: java@mkt must survive (still claimed by A's snapshot)
+                var updated = settingsService.read(tempDir);
+                assertThat(updated.enabledPlugins())
+                    .as("java@mkt must remain in settings because profile A's snapshot still claims it")
+                    .containsKey("java@mkt");
+            }
+
+            @Test
+            @DisplayName("plugin exclusive to the removed profile must be deleted")
+            void safeRemove_pluginExclusiveToBProfile_isRemoved() throws Exception {
+                var snapshotA = new CcxContext.ProfileSnapshot(
+                    List.of("java@mkt"), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+                var snapshotB = new CcxContext.ProfileSnapshot(
+                    List.of("java@mkt", "cli@mkt"), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+
+                var settings = settingsService.read(tempDir);
+                var enabledPlugins = new java.util.LinkedHashMap<String, Boolean>();
+                enabledPlugins.put("java@mkt", true);
+                enabledPlugins.put("cli@mkt", true);
+                settings = settings.withEnabledPlugins(enabledPlugins);
+                settingsService.write(settings, tempDir);
+
+                var context = contextWithBothEnabled(snapshotA, snapshotB);
+
+                service.remove(snapshotB, tempDir, context, "B");
+
+                var updated = settingsService.read(tempDir);
+                assertThat(updated.enabledPlugins())
+                    .as("cli@mkt must be removed — only profile B claimed it and B is being disabled")
+                    .doesNotContainKey("cli@mkt");
+            }
+
+            @Test
+            @DisplayName("safe overload with no sibling profiles behaves identically to plain remove")
+            void safeRemove_noSiblings_removesAllSnapshotPlugins() throws Exception {
+                var snapshot = new CcxContext.ProfileSnapshot(
+                    List.of("java@mkt"), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+
+                var settings = settingsService.read(tempDir);
+                var enabledPlugins = new java.util.LinkedHashMap<String, Boolean>();
+                enabledPlugins.put("java@mkt", true);
+                settings = settings.withEnabledPlugins(enabledPlugins);
+                settingsService.write(settings, tempDir);
+
+                // Context has only profile A — no sibling
+                var now = java.time.Instant.now();
+                var context = new me.neveux.ccx.model.CcxContext("1", java.util.Map.of(
+                    "A", new me.neveux.ccx.model.CcxContext.ProfileRecord(now, snapshot)
+                ));
+
+                service.remove(snapshot, tempDir, context, "A");
+
+                var updated = settingsService.read(tempDir);
+                assertThat(updated.enabledPlugins())
+                    .as("java@mkt must be removed when no sibling profile claims it")
+                    .doesNotContainKey("java@mkt");
+            }
+
+            @Test
+            @DisplayName("rule file claimed by a sibling must NOT be deleted")
+            void safeRemove_ruleClaimedBySibling_isPreserved() throws Exception {
+                // Create the rule file on disk
+                var rulesDir = tempDir.resolve(".claude/rules");
+                Files.createDirectories(rulesDir);
+                Files.writeString(rulesDir.resolve("java.md"), "# Java rules");
+
+                var snapshotA = new CcxContext.ProfileSnapshot(
+                    List.of(), List.of("java"), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+                var snapshotB = new CcxContext.ProfileSnapshot(
+                    List.of(), List.of("java"), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+
+                var context = contextWithBothEnabled(snapshotA, snapshotB);
+
+                service.remove(snapshotB, tempDir, context, "B");
+
+                assertThat(rulesDir.resolve("java.md"))
+                    .as("java.md rule must NOT be deleted because profile A's snapshot also claims it")
+                    .exists();
+            }
+
+            @Test
+            @DisplayName("rule file exclusive to removed profile is deleted")
+            void safeRemove_ruleExclusiveToRemovedProfile_isDeleted() throws Exception {
+                var rulesDir = tempDir.resolve(".claude/rules");
+                Files.createDirectories(rulesDir);
+                Files.writeString(rulesDir.resolve("cli.md"), "# CLI rules");
+
+                var snapshotA = new CcxContext.ProfileSnapshot(
+                    List.of(), List.of("java"), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+                var snapshotB = new CcxContext.ProfileSnapshot(
+                    List.of(), List.of("cli"), List.of(), List.of(),
+                    List.of(), List.of(), null, List.of()
+                );
+
+                var context = contextWithBothEnabled(snapshotA, snapshotB);
+
+                service.remove(snapshotB, tempDir, context, "B");
+
+                assertThat(rulesDir.resolve("cli.md"))
+                    .as("cli.md must be deleted — only profile B claimed it")
+                    .doesNotExist();
+            }
+        }
+
+        @Test
+        @DisplayName("should remove fragment @path entries from .claude/CLAUDE.md marker block")
+        void remove_removesFragmentEntriesFromClaudeMd() throws Exception {
+            var fragmentAbsPath = "/home/user/.config/ccx/profiles/java/claudemd/java-intro.md";
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+            var claudeMd = claudeDir.resolve("CLAUDE.md");
+            Files.writeString(claudeMd,
+                "<!-- ccx:begin -->\n@/some/other.md\n@" + fragmentAbsPath + "\n<!-- ccx:end -->\n");
+
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(fragmentAbsPath), null, List.of()
+            );
+
+            service.remove(snapshot, tempDir);
+
+            var content = Files.readString(claudeMd);
+            assertThat(content).as("fragment entry must be removed").doesNotContain(fragmentAbsPath);
+            assertThat(content).as("other entry must survive").contains("other.md");
+        }
+    }
+}
