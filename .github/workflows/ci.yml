@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+          cache: maven
+
+      - name: Run tests
+        run: mvn verify -B
+
+  native-smoke:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && (
+        contains(github.event.pull_request.changed_files, 'src/main/java/me/neveux/ccx/graal') ||
+        contains(github.event.pull_request.changed_files, 'src/main/resources/META-INF/native-image') ||
+        contains(github.event.pull_request.changed_files, 'pom.xml')
+      ))
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+      - name: Build native image (smoke test)
+        run: mvn -Pnative package -DskipTests -B
+      - name: Upload native smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccx-native-smoke-linux
+          path: target/ccx-runner
