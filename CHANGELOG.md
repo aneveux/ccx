@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-16
+
 ### Changed
 
+- Native binary is now named `ccx` instead of `ccx-runner`.
 - Renamed Java package from `io.github.aneveux.ccx` to `me.neveux.ccx`.
 - `status --full` now shows global plugins, skill overrides, and MCP servers.
 - Profile dependency closure: enabling a profile auto-enables its `extends` dependencies; missing dependencies show as BROKEN drift state.
@@ -57,5 +60,6 @@ Initial release.
 - Atomic, path-security-checked file writes for all managed configuration.
 - `install.sh` for one-line installation into `~/.local/bin`.
 
-[Unreleased]: https://github.com/aneveux/ccx/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/aneveux/ccx/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/aneveux/ccx/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/aneveux/ccx/releases/tag/v0.1.0

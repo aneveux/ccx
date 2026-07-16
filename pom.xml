@@ -38,7 +38,7 @@
         <!-- CI-friendly version — the git-changelist-maven-extension rewrites ${changelist}
              to -rc<commitcount>.<sha> when built with -Dset.changelist (see .mvn/). A plain
              local build resolves to ${revision}${changelist} = 0.1.0-SNAPSHOT. -->
-        <revision>0.1.0</revision>
+        <revision>0.2.0</revision>
         <changelist>-SNAPSHOT</changelist>
         <java.version>25</java.version>
         <maven.compiler.source>25</maven.compiler.source>
@@ -233,7 +233,7 @@
                                 </goals>
                                 <configuration>
                                     <systemPropertyVariables>
-                                        <native.image.path>${project.build.directory}/ccx-runner</native.image.path>
+                                        <native.image.path>${project.build.directory}/ccx</native.image.path>
                                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                                         <maven.home>${maven.home}</maven.home>
                                     </systemPropertyVariables>
@@ -289,7 +289,7 @@
                                         <type>NATIVE_IMAGE</type>
                                         <artifacts>
                                             <artifact>
-                                                <path>{{basedir}}/target/ccx-runner</path>
+                                                <path>{{basedir}}/target/ccx</path>
                                                 <platform>linux-x86_64</platform>
                                             </artifact>
                                         </artifacts>

@@ -60,7 +60,7 @@ java -jar target/quarkus-app/quarkus-run.jar --help
 **Native binary (requires GraalVM 25 with `native-image`):**
 ```bash
 mvn package -Pnative
-./target/ccx-runner --help
+./target/ccx --help
 ```
 
 ## Commands
@@ -427,7 +427,7 @@ mvn verify
 ```bash
 # Install GraalVM 25 with native-image
 mvn package -Pnative
-./target/ccx-runner --help
+./target/ccx --help
 ```
 
 ### Release
@@ -443,7 +443,7 @@ git push origin v0.1.0
 
 How a build becomes an installed binary, end to end.
 
-**1. Build** — `mvn clean package -Pnative` produces `target/ccx-runner`, a
+**1. Build** — `mvn clean package -Pnative` produces `target/ccx`, a
 self-contained Linux x86_64 native executable (no JVM required at runtime).
 
 **2. Release** — the `release` Maven profile runs JReleaser, which publishes the

@@ -26,7 +26,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ccx-native-linux-x86_64
-          path: target/ccx-runner
+          path: target/ccx
 
   release:
     needs: build-native
@@ -47,7 +47,7 @@ jobs:
           name: ccx-native-linux-x86_64
           path: target/
       - name: Make binary executable
-        run: chmod +x target/ccx-runner
+        run: chmod +x target/ccx
       - name: JReleaser full release
         run: mvn -Prelease jreleaser:full-release -B -Dchangelist=
         env:

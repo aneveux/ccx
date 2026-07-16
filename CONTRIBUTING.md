@@ -33,7 +33,7 @@ java -jar target/quarkus-app/quarkus-run.jar --help
 **Native binary:**
 ```bash
 mvn package -Pnative
-./target/ccx-runner --help
+./target/ccx --help
 ```
 
 ## Commit conventions
