@@ -280,7 +280,7 @@
                                         <type>NATIVE_IMAGE</type>
                                         <artifacts>
                                             <artifact>
-                                                <path>{{distributionPath}}/{{distributionName}}-runner</path>
+                                                <path>{{basedir}}/target/ccx-runner</path>
                                                 <platform>linux-x86_64</platform>
                                             </artifact>
                                         </artifacts>
