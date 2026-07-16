@@ -271,8 +271,16 @@
                                         <owner>aneveux</owner>
                                         <name>ccx</name>
                                         <branch>master</branch>
+                                        <milestone>
+                                            <close>false</close>
+                                        </milestone>
                                         <changelog>
                                             <preset>gitmoji</preset>
+                                            <formatted>ALWAYS</formatted>
+                                            <format>- {{commitShortHash}} {{commitTitle}}</format>
+                                            <contributors>
+                                                <enabled>false</enabled>
+                                            </contributors>
                                         </changelog>
                                     </github>
                                 </release>
