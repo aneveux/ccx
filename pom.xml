@@ -270,6 +270,7 @@
                                     <github>
                                         <owner>aneveux</owner>
                                         <name>ccx</name>
+                                        <branch>master</branch>
                                         <changelog>
                                             <preset>gitmoji</preset>
                                         </changelog>
