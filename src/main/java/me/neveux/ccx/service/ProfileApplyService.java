@@ -165,38 +165,41 @@ public class ProfileApplyService {
 
     private List<String> applyRules(Profile resolved, Path projectRoot, boolean overwrite, String profileName) {
         var writtenRules = new ArrayList<String>();
-        if (resolved.rules() != null && resolved.rules().files() != null) {
-            var rulesDir = projectRoot.resolve(".claude/rules").normalize();
-            var profileRulesDir = profileName != null
-                ? ccxConfigService.profileDir(profileName).resolve("rules")
-                : null;
-            for (var ruleName : resolved.rules().files()) {
-                if (ruleName == null) continue;
-                var targetPath = rulesDir.resolve(ruleName + ".md").normalize();
-                if (!targetPath.startsWith(rulesDir)) {
-                    throw new IllegalArgumentException("invalid rule name: " + ruleName);
-                }
-                if (profileRulesDir == null) {
-                    log.warn("no profile name — cannot locate rule source for rule={}", ruleName);
-                    continue;
-                }
-                var sourcePath = profileRulesDir.resolve(ruleName + ".md");
-                if (!Files.exists(sourcePath)) {
-                    log.warn("rule file not found in profile dir rule={} source={}", ruleName, sourcePath);
-                    continue;
-                }
-                if (Files.exists(targetPath) && !overwrite) {
-                    log.debug("rule file already exists, skipping path={}", targetPath);
-                    writtenRules.add(ruleName);
-                    continue;
-                }
-                try {
-                    var content = Files.readString(sourcePath);
-                    FileUtils.atomicWrite(targetPath, tmp -> Files.writeString(tmp, content));
-                    writtenRules.add(ruleName);
-                    log.debug("rule file written path={}", targetPath);
+        if (profileName != null) {
+            var rulesSourceDir = ccxConfigService.profileDir(profileName).resolve("rules");
+            if (Files.isDirectory(rulesSourceDir)) {
+                var rulesTargetDir = projectRoot.resolve(".claude/rules").normalize();
+                try (var ruleStream = Files.list(rulesSourceDir)) {
+                    ruleStream
+                        .filter(p -> p.getFileName().toString().endsWith(".md"))
+                        .sorted()
+                        .forEach(rulePath -> {
+                            if (!isUnderConfigDir(rulePath)) {
+                                return;
+                            }
+                            var basename = rulePath.getFileName().toString();
+                            var targetPath = rulesTargetDir.resolve(basename).normalize();
+                            if (!targetPath.startsWith(rulesTargetDir)) {
+                                log.warn("skipping rule file with traversal name: {}", basename);
+                                return;
+                            }
+                            var ruleName = basename.replaceAll("\\.md$", "");
+                            if (Files.exists(targetPath) && !overwrite) {
+                                log.debug("rule file already exists, skipping path={}", targetPath);
+                                writtenRules.add(ruleName);
+                                return;
+                            }
+                            try {
+                                var content = Files.readString(rulePath);
+                                FileUtils.atomicWrite(targetPath, tmp -> Files.writeString(tmp, content));
+                                writtenRules.add(ruleName);
+                                log.debug("rule file written path={}", targetPath);
+                            } catch (IOException e) {
+                                log.warn("failed to write rule file name={}", basename, e);
+                            }
+                        });
                 } catch (IOException e) {
-                    log.warn("failed to write rule file name={}", ruleName, e);
+                    log.warn("failed to scan rules dir profile={}", profileName, e);
                 }
             }
         }

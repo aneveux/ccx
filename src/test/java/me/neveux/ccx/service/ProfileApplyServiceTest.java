@@ -8,7 +8,6 @@ import me.neveux.ccx.model.CcxContext;
 import me.neveux.ccx.model.Permissions;
 import me.neveux.ccx.model.Profile;
 import me.neveux.ccx.model.ProfilePlugins;
-import me.neveux.ccx.model.ProfileRules;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,7 +41,7 @@ class ProfileApplyServiceTest {
         var javaProfileDir = ccxConfigDir.resolve("profiles/java");
         Files.createDirectories(javaProfileDir);
         Files.writeString(javaProfileDir.resolve("profile.yaml"),
-            "metadata:\n  name: java\n  description: Java/Maven projects\nplugins:\n  enable:\n    - java@claude-java-stack\nrules:\n  files:\n    - java\n");
+            "metadata:\n  name: java\n  description: Java/Maven projects\nplugins:\n  enable:\n    - java@claude-java-stack\n");
         var yamlMapper = new ObjectMapper(new YAMLFactory());
         yamlMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         yamlMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
@@ -100,18 +99,40 @@ class ProfileApplyServiceTest {
         }
 
         @Test
+        @DisplayName("should install every .md in the profile rules/ dir without any YAML declaration")
+        void apply_installsAllRulesFromDir_withoutYamlDeclaration() throws Exception {
+            // The profile.yaml written in setUp declares NO rules block — the rule files
+            // must still be applied purely from the rules/ directory contents.
+            var profileRulesDir = ccxConfigDir.resolve("profiles/java/rules");
+            Files.writeString(profileRulesDir.resolve("java-safety.md"), "# Java safety\nNo empty catch.\n");
+
+            var resolved = resolvedJavaProfile();
+            var snapshot = service.apply(resolved, tempDir);
+
+            assertThat(tempDir.resolve(".claude/rules/java.md"))
+                .as("java.md must be auto-discovered and installed")
+                .exists();
+            assertThat(tempDir.resolve(".claude/rules/java-safety.md"))
+                .as("java-safety.md must be auto-discovered and installed with no YAML entry")
+                .exists();
+            assertThat(Files.readString(tempDir.resolve(".claude/rules/java-safety.md")))
+                .as("installed rule content must match the source")
+                .contains("No empty catch");
+            assertThat(snapshot.rules())
+                .as("snapshot must record both auto-discovered rule basenames")
+                .containsExactlyInAnyOrder("java", "java-safety");
+        }
+
+        @Test
         @DisplayName("should not overwrite an existing rule file when overwrite is false")
         void apply_skipsExistingRuleFile_whenOverwriteFalse() throws Exception {
             var rulesDir = tempDir.resolve(".claude/rules");
             Files.createDirectories(rulesDir);
-            var ruleFile = rulesDir.resolve("testing.md");
+            var ruleFile = rulesDir.resolve("java.md");
             Files.writeString(ruleFile, "custom content");
 
-            var rules = new ProfileRules(List.of("testing"));
-            var profile = new Profile()
-                .withRules(rules);
-
-            service.apply(profile, tempDir, false);
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir, false);
 
             assertThat(Files.readString(ruleFile))
                 .as("apply with overwrite=false must not overwrite an existing rule file")
@@ -119,42 +140,22 @@ class ProfileApplyServiceTest {
         }
 
         @Test
-        @DisplayName("should not throw when rules.files contains a null entry (treated as missing resource)")
-        void apply_toleratesNullRuleEntry() {
-            var ruleFiles = new java.util.ArrayList<String>();
-            ruleFiles.add(null);
-            var rules = new ProfileRules(ruleFiles);
-            var profile = new Profile()
-                .withRules(rules);
+        @EnabledOnOs(OS.LINUX)
+        @DisplayName("should not install a rule file whose real path lies outside configDir (symlink guard)")
+        void apply_skipsRuleFileFromSymlinkOutsideConfigDir() throws Exception {
+            var victim = tempDir.resolve("victim.txt");
+            Files.writeString(victim, "LEAKED CONTENT");
 
-            // The null entry must be SKIPPED, not turned into a "null.md" path.
-            var snapshot = service.apply(profile, tempDir, false);
+            var profileRulesDir = ccxConfigDir.resolve("profiles/java/rules");
+            var symlinkPath = profileRulesDir.resolve("evil.md");
+            Files.createSymbolicLink(symlinkPath, victim.toAbsolutePath());
 
-            assertThat(snapshot)
-                .as("apply must return a snapshot even when rules.files contains a null entry")
-                .isNotNull();
-            assertThat(snapshot.rules())
-                .as("the null rule entry must be skipped — snapshot must not record any rule (no \"null\" entry)")
-                .doesNotContain("null")
-                .isEmpty();
-            assertThat(tempDir.resolve(".claude/rules/null.md"))
-                .as("a null rule entry must NOT be materialised as a null.md file on disk")
+            var resolved = resolvedJavaProfile();
+            service.apply(resolved, tempDir, true);
+
+            assertThat(tempDir.resolve(".claude/rules/evil.md"))
+                .as("rule file resolving outside configDir via symlink must NOT be installed")
                 .doesNotExist();
-        }
-
-        @Test
-        @DisplayName("should reject a rule name containing path traversal with IllegalArgumentException")
-        void apply_skipsRuleWithTraversalName() {
-            var rules = new ProfileRules(List.of("../../etc/injected"));
-            var profile = new Profile()
-                .withRules(rules);
-
-            // The service must validate rule names and reject traversal attempts
-            // rather than silently skipping them or resolving them outside the rules dir.
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.apply(profile, tempDir, false))
-                .as("apply must throw on a rule name containing path traversal")
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("invalid rule name");
         }
 
         @Test

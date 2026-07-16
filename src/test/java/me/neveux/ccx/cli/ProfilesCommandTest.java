@@ -176,7 +176,11 @@ class ProfilesCommandTest {
             var factory = new TestCommandFactory(
                 settingsService, profileService,
                 new me.neveux.ccx.service.PluginMapService(),
-                new me.neveux.ccx.service.ClaudeMdService()
+                new me.neveux.ccx.service.ClaudeMdService(),
+                new me.neveux.ccx.service.SkillsService(),
+                new me.neveux.ccx.service.ProfileApplyService(),
+                new me.neveux.ccx.service.CcxContextService(),
+                ccxConfig
             );
             cl = new CommandLine(new CcxCommand(), factory);
             cl.setOut(new PrintWriter(capture, true));

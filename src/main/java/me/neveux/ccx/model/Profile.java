@@ -22,7 +22,6 @@ import java.util.Map;
  * @param metadata   display name and description shown in the TUI
  * @param extend     names of profiles this profile inherits from
  * @param plugins    plugin enablement configuration
- * @param rules      rule file paths to include
  * @param permissions tool-use permission allow/deny lists
  * @param claudeMd   CLAUDE.md fragment paths to compose
  * @param env        environment variable overrides
@@ -34,7 +33,6 @@ public record Profile(
     ProfileMetadata metadata,
     @JsonProperty("extends") List<String> extend,
     ProfilePlugins plugins,
-    ProfileRules rules,
     Permissions permissions,
     ProfileClaudeMd claudeMd,
     Map<String, String> env,
@@ -42,38 +40,34 @@ public record Profile(
 ) {
 
     public Profile() {
-        this(null, null, null, null, null, null, null, null);
+        this(null, null, null, null, null, null, null);
     }
 
     public Profile withMetadata(ProfileMetadata metadata) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     public Profile withExtend(List<String> extend) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     public Profile withPlugins(ProfilePlugins plugins) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
-    }
-
-    public Profile withRules(ProfileRules rules) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     public Profile withPermissions(Permissions permissions) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     public Profile withClaudeMd(ProfileClaudeMd claudeMd) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     public Profile withEnv(Map<String, String> env) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     public Profile withIgnore(List<String> ignore) {
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 }

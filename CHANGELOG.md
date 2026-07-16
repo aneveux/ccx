@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Profile rule files are now auto-discovered: every `*.md` in a profile's `rules/`
+  directory is applied, matching how `claudemd/` and `commands/` already work. The
+  `rules.files` key in `profile.yaml` is no longer read.
+
 ## [0.2.0] - 2026-07-16
 
 ### Changed

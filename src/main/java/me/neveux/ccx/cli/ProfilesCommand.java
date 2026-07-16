@@ -123,11 +123,6 @@ public class ProfilesCommand implements Runnable {
                     resolved.plugins().enable().forEach(p -> out.println("  " + p));
                 }
 
-                if (resolved.rules() != null && resolved.rules().files() != null && !resolved.rules().files().isEmpty()) {
-                    out.println("Rules:");
-                    resolved.rules().files().forEach(r -> out.println("  " + r));
-                }
-
                 if (resolved.env() != null && !resolved.env().isEmpty()) {
                     out.println("Env:");
                     resolved.env().forEach((k, v) -> out.println("  " + k + "=" + v));
@@ -144,6 +139,22 @@ public class ProfilesCommand implements Runnable {
                 }
 
                 if (ccxConfigService != null) {
+                    var rulesDir = ccxConfigService.profileDir(name).resolve("rules");
+                    if (Files.isDirectory(rulesDir)) {
+                        try (var stream = Files.list(rulesDir)) {
+                            var ruleNames = stream
+                                .filter(p -> p.getFileName().toString().endsWith(".md"))
+                                .map(p -> p.getFileName().toString().replaceAll("\\.md$", ""))
+                                .sorted()
+                                .toList();
+                            if (!ruleNames.isEmpty()) {
+                                out.println("Rules:");
+                                ruleNames.forEach(r -> out.println("  " + r));
+                            }
+                        } catch (IOException e) {
+                            log.debug("failed to list rules dir for profile name={} dir={}", name, rulesDir, e);
+                        }
+                    }
                     var cmdDir = ccxConfigService.profileDir(name).resolve("commands");
                     if (Files.isDirectory(cmdDir)) {
                         try (var stream = Files.list(cmdDir)) {

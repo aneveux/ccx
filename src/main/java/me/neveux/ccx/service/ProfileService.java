@@ -175,11 +175,10 @@ public class ProfileService {
         var plugins = mergePlugins(ancestor.plugins(), child.plugins());
         var permissions = mergePermissions(ancestor.permissions(), child.permissions());
         var claudeMd = mergeClaudeMd(ancestor.claudeMd(), child.claudeMd());
-        var rules = child.rules() != null ? child.rules() : ancestor.rules();
         var env = mergeEnv(ancestor.env(), child.env());
         var ignore = ListUtils.orderedUnion(ancestor.ignore(), child.ignore());
 
-        return new Profile(metadata, extend, plugins, rules, permissions, claudeMd, env, ignore);
+        return new Profile(metadata, extend, plugins, permissions, claudeMd, env, ignore);
     }
 
     private ProfilePlugins mergePlugins(ProfilePlugins ancestor, ProfilePlugins child) {

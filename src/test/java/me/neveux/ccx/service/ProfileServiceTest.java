@@ -266,46 +266,6 @@ class ProfileServiceTest {
         }
 
         @Test
-        @DisplayName("child rules.files wins over parent rules.files (no merge — child takes precedence)")
-        void resolve_mergesRulesFromParent() {
-            var parent = new Profile()
-                .withMetadata(new ProfileMetadata("base", null))
-                .withRules(new me.neveux.ccx.model.ProfileRules(List.of("parent-rule")));
-
-            var child = new Profile()
-                .withMetadata(new ProfileMetadata("child", null))
-                .withExtend(List.of("base"))
-                .withRules(new me.neveux.ccx.model.ProfileRules(List.of("child-rule")));
-
-            var registry = Map.of("base", parent, "child", child);
-            var resolved = service.resolve(child, registry);
-
-            assertThat(resolved.rules().files())
-                .as("child rules win over parent — resolved rules must contain only child-rule")
-                .containsExactly("child-rule");
-        }
-
-        @Test
-        @DisplayName("parent rules.files are used when child has no rules defined")
-        void resolve_usesParentRules_whenChildHasNone() {
-            var parent = new Profile()
-                .withMetadata(new ProfileMetadata("base", null))
-                .withRules(new me.neveux.ccx.model.ProfileRules(List.of("parent-rule")));
-
-            var child = new Profile()
-                .withMetadata(new ProfileMetadata("child", null))
-                .withExtend(List.of("base"));
-            // child has no rules
-
-            var registry = Map.of("base", parent, "child", child);
-            var resolved = service.resolve(child, registry);
-
-            assertThat(resolved.rules().files())
-                .as("when child has no rules, parent rules must be inherited")
-                .containsExactly("parent-rule");
-        }
-
-        @Test
         @DisplayName("merging two profiles that both lack plugins yields a non-null empty enable list")
         void concatDedup_returnsEmptyList_whenBothInputsNull() {
             // An extends chain forces mergeProfiles -> mergePlugins(null, null) -> concatDedup(null, null).
