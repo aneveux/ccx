@@ -257,8 +257,11 @@
                                 <project>
                                     <name>ccx</name>
                                     <description>CLI for managing fine-grained Claude Code configuration per project</description>
-                                    <website>https://github.com/aneveux/ccx</website>
+                                    <copyright>2026 Antoine Neveux</copyright>
                                     <license>MIT</license>
+                                    <links>
+                                        <homepage>https://github.com/aneveux/ccx</homepage>
+                                    </links>
                                     <authors>
                                         <author>Antoine Neveux</author>
                                     </authors>
