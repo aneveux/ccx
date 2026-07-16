@@ -120,11 +120,10 @@ public class TuiDataService {
         var plugins = buildPluginEntries(settings, globalSettings, marketplaceMap, marketplaceDescriptions);
         var claudeMdEntries = buildStackEntries(projectDir, globalRoot);
         var mcps = buildMcpEntries(settings);
-        var rulesCount = countRulesFiles(projectDir);
 
         var profiles = buildProfiles(projectDir, settings, ccxContext);
 
-        var overview = buildOverview(projectDir, globalRoot, plugins, profiles, mcps, claudeMdEntries, ccxContext, rulesCount, settingsValid, settings, globalSettings);
+        var overview = buildOverview(projectDir, globalRoot, plugins, profiles, mcps, claudeMdEntries, ccxContext, settingsValid, settings, globalSettings);
 
         log.debug("snapshot built projectDir={} pluginCount={} stackCount={} settingsValid={}",
             projectDir, plugins.size(), claudeMdEntries.size(), settingsValid);
@@ -354,7 +353,6 @@ public class TuiDataService {
         List<TuiSnapshot.McpEntry> mcps,
         List<TuiSnapshot.StackEntry> claudeMdEntries,
         CcxContext ccxContext,
-        int rulesCount,
         boolean settingsValid,
         Settings settings,
         Settings globalSettings
@@ -399,7 +397,6 @@ public class TuiDataService {
         var privateClaudeMdFile = projectDir.resolve(".claude/CLAUDE.md");
         var privateClaudeMdPath = Files.exists(privateClaudeMdFile)
             ? privateClaudeMdFile.toAbsolutePath().toString() : null;
-        var projectSettingsExists = Files.exists(projectDir.resolve(".claude/settings.json"));
 
         var fragmentNames = claudeMdEntries.stream()
             .filter(e -> e.source() == TuiSnapshot.StackSource.PROJECT
@@ -420,8 +417,6 @@ public class TuiDataService {
             .mcpCount(mcps.size())
             .claudeIgnore(claudeIgnore)
             .hookCount(settings.hooks() != null ? settings.hooks().size() : 0)
-            .rulesExists(rulesExists)
-            .rulesCount(rulesCount)
             .projectPluginNames(pluginNames.projectNames())
             .globalPluginNames(pluginNames.globalNames())
             .rulesFileNames(rulesFileNames)
@@ -430,7 +425,6 @@ public class TuiDataService {
             .globalClaudeMdPath(globalClaudeMdPath)
             .globalHookCount(globalHookCount)
             .privateClaudeMdPath(privateClaudeMdPath)
-            .projectSettingsExists(projectSettingsExists)
             .fragmentNames(fragmentNames)
             .mcpServerNames(mcpServerNames)
             .build();
@@ -484,16 +478,4 @@ public class TuiDataService {
         }
     }
 
-    private int countRulesFiles(Path projectDir) {
-        var rulesDir = projectDir.resolve(".claude/rules");
-        if (!Files.isDirectory(rulesDir)) {
-            return 0;
-        }
-        try (Stream<Path> files = Files.list(rulesDir)) {
-            return (int) files.filter(Files::isRegularFile).count();
-        } catch (IOException e) {
-            log.warn("failed to list rules dir path={}", rulesDir, e);
-            return 0;
-        }
-    }
 }

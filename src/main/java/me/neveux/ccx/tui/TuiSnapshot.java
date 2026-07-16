@@ -77,8 +77,6 @@ public record TuiSnapshot(
         int mcpCount,
         ClaudeIgnoreInfo claudeIgnore,
         int hookCount,
-        boolean rulesExists,
-        int rulesCount,
         List<String> projectPluginNames,
         List<String> globalPluginNames,
         List<String> rulesFileNames,
@@ -87,7 +85,6 @@ public record TuiSnapshot(
         String globalClaudeMdPath,
         int globalHookCount,
         String privateClaudeMdPath,
-        boolean projectSettingsExists,
         List<String> fragmentNames,
         List<String> mcpServerNames
     ) {
@@ -103,8 +100,6 @@ public record TuiSnapshot(
             private int mcpCount = 0;
             private ClaudeIgnoreInfo claudeIgnore = new ClaudeIgnoreInfo(false, false, 0, 0);
             private int hookCount = 0;
-            private boolean rulesExists = false;
-            private int rulesCount = 0;
             private List<String> projectPluginNames = List.of();
             private List<String> globalPluginNames = List.of();
             private List<String> rulesFileNames = List.of();
@@ -113,7 +108,6 @@ public record TuiSnapshot(
             private String globalClaudeMdPath = null;
             private int globalHookCount = 0;
             private String privateClaudeMdPath = null;
-            private boolean projectSettingsExists = false;
             private List<String> fragmentNames = List.of();
             private List<String> mcpServerNames = List.of();
 
@@ -124,8 +118,6 @@ public record TuiSnapshot(
             public Builder mcpCount(int v) { this.mcpCount = v; return this; }
             public Builder claudeIgnore(ClaudeIgnoreInfo v) { this.claudeIgnore = v; return this; }
             public Builder hookCount(int v) { this.hookCount = v; return this; }
-            public Builder rulesExists(boolean v) { this.rulesExists = v; return this; }
-            public Builder rulesCount(int v) { this.rulesCount = v; return this; }
             public Builder projectPluginNames(List<String> v) { this.projectPluginNames = v; return this; }
             public Builder globalPluginNames(List<String> v) { this.globalPluginNames = v; return this; }
             public Builder rulesFileNames(List<String> v) { this.rulesFileNames = v; return this; }
@@ -134,17 +126,16 @@ public record TuiSnapshot(
             public Builder globalClaudeMdPath(String v) { this.globalClaudeMdPath = v; return this; }
             public Builder globalHookCount(int v) { this.globalHookCount = v; return this; }
             public Builder privateClaudeMdPath(String v) { this.privateClaudeMdPath = v; return this; }
-            public Builder projectSettingsExists(boolean v) { this.projectSettingsExists = v; return this; }
             public Builder fragmentNames(List<String> v) { this.fragmentNames = v; return this; }
             public Builder mcpServerNames(List<String> v) { this.mcpServerNames = v; return this; }
 
             public OverviewData build() {
                 return new OverviewData(
                     enabledProfileNames, profileDriftStates, projectPluginCount, globalPluginCount,
-                    mcpCount, claudeIgnore, hookCount, rulesExists, rulesCount,
+                    mcpCount, claudeIgnore, hookCount,
                     projectPluginNames, globalPluginNames, rulesFileNames, contextFilePath,
                     projectClaudeMdPath, globalClaudeMdPath, globalHookCount,
-                    privateClaudeMdPath, projectSettingsExists, fragmentNames, mcpServerNames
+                    privateClaudeMdPath, fragmentNames, mcpServerNames
                 );
             }
         }

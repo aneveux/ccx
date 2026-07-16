@@ -29,7 +29,6 @@ class OverviewTabTest {
             .globalPluginCount(1)
             .projectPluginNames(List.of("java@claude-java-stack"))
             .globalPluginNames(List.of("globaltool@mkt"))
-            .rulesCount(1)
             .rulesFileNames(List.of("java.md"))
             .fragmentNames(List.of("java-fragment.md", "quarkus-fragment.md"))
             .mcpCount(2)
@@ -39,7 +38,6 @@ class OverviewTabTest {
             .privateClaudeMdPath("./.claude/CLAUDE.md")
             .hookCount(1)
             .globalHookCount(0)
-            .projectSettingsExists(true)
             .claudeIgnore(new TuiSnapshot.ClaudeIgnoreInfo(false, true, 0, 3))
             .build();
     }

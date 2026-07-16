@@ -1,6 +1,7 @@
 package me.neveux.ccx.tui.tabs;
 
 import dev.tamboui.text.Line;
+import me.neveux.ccx.tui.Quips;
 import me.neveux.ccx.tui.TuiSnapshot;
 
 import java.util.List;
@@ -54,6 +55,6 @@ public final class McpTab extends FilterableTab<TuiSnapshot.McpEntry> {
                 + "}\n"
                 + "```";
         }
-        return "(⌒_⌒;) nothing matches";
+        return Quips.EMPTY[0] + " nothing matches";
     }
 }

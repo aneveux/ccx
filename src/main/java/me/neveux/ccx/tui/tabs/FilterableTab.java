@@ -16,6 +16,7 @@ import dev.tamboui.widgets.list.ListWidget;
 import me.neveux.ccx.tui.CatppuccinTheme;
 import me.neveux.ccx.tui.FilterState;
 import me.neveux.ccx.tui.PreviewRenderer;
+import me.neveux.ccx.tui.Quips;
 import me.neveux.ccx.tui.TuiSnapshot;
 
 import java.util.List;
@@ -41,7 +42,7 @@ public abstract class FilterableTab<T> {
     protected abstract Function<T, String> filterKey();
     protected abstract Line listLabelLine(T item, TuiSnapshot snap);
     protected abstract String preview(T item, TuiSnapshot snap);
-    protected String emptyStateMessage(TuiSnapshot snap) { return "(⌒_⌒;) nothing to show"; }
+    protected String emptyStateMessage(TuiSnapshot snap) { return Quips.EMPTY[0] + " nothing to show"; }
 
     public void render(Frame frame, Rect area, TuiSnapshot snap, FilterState filterState, int selectedRow) {
         var vertAreas = Layout.vertical()

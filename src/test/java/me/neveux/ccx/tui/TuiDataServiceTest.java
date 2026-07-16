@@ -326,8 +326,8 @@ class TuiDataServiceTest {
     class WhenRulesDirectoryExists {
 
         @Test
-        @DisplayName("rulesCount counts every regular file under .claude/rules/")
-        void snapshot_withRulesDir_rulesCountMatchesFileCount() throws Exception {
+        @DisplayName("rulesFileNames lists every regular file under .claude/rules/")
+        void snapshot_withRulesDir_rulesFileNamesMatchFiles() throws Exception {
             var rulesDir = projectDir.resolve(".claude/rules");
             Files.createDirectories(rulesDir);
             Files.writeString(rulesDir.resolve("java.md"), "# java rules");
@@ -336,28 +336,16 @@ class TuiDataServiceTest {
 
             var snap = service.snapshot(projectDir, globalRoot);
 
-            assertThat(snap.overview().rulesExists())
-                .as("rulesExists must be true when .claude/rules/ is a directory")
-                .isTrue();
-            assertThat(snap.overview().rulesCount())
-                .as("rulesCount must equal the number of regular files in .claude/rules/")
-                .isEqualTo(3);
             assertThat(snap.overview().rulesFileNames())
                 .as("rulesFileNames must list every rule file present on disk")
                 .containsExactlyInAnyOrder("java.md", "git.md", "security.md");
         }
 
         @Test
-        @DisplayName("rulesExists is false and rulesCount is 0 when .claude/rules/ is absent")
-        void snapshot_withoutRulesDir_rulesAbsentAndCountZero() {
+        @DisplayName("rulesFileNames is empty when .claude/rules/ is absent")
+        void snapshot_withoutRulesDir_rulesFileNamesEmpty() {
             var snap = service.snapshot(projectDir, globalRoot);
 
-            assertThat(snap.overview().rulesExists())
-                .as("rulesExists must be false when .claude/rules/ does not exist")
-                .isFalse();
-            assertThat(snap.overview().rulesCount())
-                .as("rulesCount must be 0 when .claude/rules/ does not exist")
-                .isZero();
             assertThat(snap.overview().rulesFileNames())
                 .as("rulesFileNames must be empty when .claude/rules/ does not exist")
                 .isEmpty();
@@ -1046,30 +1034,6 @@ class TuiDataServiceTest {
             assertThat(snap.overview().privateClaudeMdPath())
                 .as("privateClaudeMdPath must be null when .claude/CLAUDE.md is absent")
                 .isNull();
-        }
-
-        @Test
-        @DisplayName("overview.projectSettingsExists is true when .claude/settings.json exists")
-        void overview_projectSettingsExists_trueWhenSettingsPresent() throws Exception {
-            var claudeDir = projectDir.resolve(".claude");
-            Files.createDirectories(claudeDir);
-            Files.writeString(claudeDir.resolve("settings.json"), "{}");
-
-            var snap = service.snapshot(projectDir, globalRoot);
-
-            assertThat(snap.overview().projectSettingsExists())
-                .as("projectSettingsExists must be true when .claude/settings.json exists")
-                .isTrue();
-        }
-
-        @Test
-        @DisplayName("overview.projectSettingsExists is false when .claude/settings.json is absent")
-        void overview_projectSettingsExists_falseWhenSettingsAbsent() {
-            var snap = service.snapshot(projectDir, globalRoot);
-
-            assertThat(snap.overview().projectSettingsExists())
-                .as("projectSettingsExists must be false when .claude/settings.json is absent")
-                .isFalse();
         }
     }
 

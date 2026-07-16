@@ -121,7 +121,7 @@ Dependency direction: `cli → service → model`. The `tui` package depends on 
 
 ## Boundaries
 
-- **CLI layer never reads/writes files directly** — all I/O goes through services
+- **CLI layer delegates business logic to services** — edge-case commands (`CleanCommand`, `ProfilesCommand.NewCommand`, `ConfigCommand`) do direct atomic writes/deletes where no service boundary is warranted; all other I/O goes through services
 - **Tab classes are pure renderers** — no service injection, no file I/O, no state mutation
 - **`TuiActions` is the only TUI class that mutates project state** — all other TUI classes are read-only
 - **All file writes are atomic** — write to `.tmp` sibling, then `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`
