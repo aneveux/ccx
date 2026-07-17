@@ -15,7 +15,7 @@ Handles `CLAUDE.md` composition, plugin enablement, MCP servers, skill overrides
 
 **Linux x86_64 — one line (no sudo required):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aneveux/ccx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aneveux/ccx/master/install.sh | bash
 ```
 
 The installer drops the `ccx` binary into `~/.local/bin` by default. Make sure that
@@ -28,12 +28,12 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
 Override the install directory with `CCX_INSTALL_DIR`:
 
 ```bash
-CCX_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/aneveux/ccx/main/install.sh | bash
+CCX_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/aneveux/ccx/master/install.sh | bash
 ```
 
-The installer downloads the latest Linux x86_64 asset, **verifies its SHA-256
+The installer downloads the latest Linux x86_64 binary, **verifies its SHA-256
 checksum before installing (fail-closed — it aborts on a missing or mismatched
-checksum)**, then unpacks the binary into the install directory. Set
+checksum)**, then moves the binary into the install directory. Set
 `CCX_SKIP_CHECKSUM=1` only if you understand the risk.
 
 Or download a binary directly from [Releases](https://github.com/aneveux/ccx/releases/latest).
@@ -452,15 +452,16 @@ native binary to [GitHub Releases](https://github.com/aneveux/ccx/releases) on t
 by pushing a `v*` tag (see [Release](#release) above); CI runs the native build and
 the JReleaser publish step.
 
-**3. Install** — `install.sh` (the `curl … | bash` one-liner above) discovers the
-latest Linux x86_64 asset from the GitHub release JSON, **verifies its SHA-256
-checksum (fail-closed: aborts on a missing or mismatched checksum)**, and installs
-the binary to `~/.local/bin/ccx`. Override the target with `CCX_INSTALL_DIR`;
-bypass verification (not recommended) with `CCX_SKIP_CHECKSUM=1`.
+**3. Install** — `install.sh` (the `curl … | bash` one-liner above) resolves the
+latest release tag, downloads the `ccx` binary and its `checksums_sha256.txt`
+sidecar, **verifies the SHA-256 checksum (fail-closed: aborts on a missing or
+mismatched checksum)**, and installs the binary to `~/.local/bin/ccx`. Override the
+target with `CCX_INSTALL_DIR`; bypass verification (not recommended) with
+`CCX_SKIP_CHECKSUM=1`.
 
 **Documented limits (current):**
 - **Linux x86_64 only.** The release builds and publishes a single
-  `linux-x86_64` native artifact; `install.sh` matches only that platform.
+  `linux-x86_64` native binary; `install.sh` fetches only that binary.
 - **No macOS build yet.** macOS arm64 native builds and the Homebrew tap are
   stubbed but disabled in `pom.xml` until a macOS native build job is added to
   `release.yml`.
