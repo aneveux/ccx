@@ -331,10 +331,6 @@ plugins:
   enable:
     - java@my-marketplace
 
-rules:
-  files:
-    - no-empty-catch        # resolves to rules/no-empty-catch.md
-
 permissions:
   allow:
     - "Bash(mvn *)"
@@ -354,7 +350,9 @@ ignore:
 
 ### A fragment file
 
-Rule and claudemd fragments are plain markdown. Example
+Rule and claudemd fragments are plain markdown. Rule files are auto-discovered:
+every `*.md` in a profile's `rules/` directory is applied — there is no key for
+them in `profile.yaml`. Example
 `~/.config/ccx/profiles/my-profile/claudemd/java.md`:
 
 ```markdown

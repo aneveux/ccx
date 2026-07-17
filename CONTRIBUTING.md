@@ -109,16 +109,12 @@ plugins:
 claudeMd:
   fragments:
     - my-fragment
-
-rules:
-  files:
-    - my-rule
 ```
 
 Key schema fields:
 - `extends: [parent-profile]` — inherit from one or more profiles; merged depth-first
 - `plugins.enable` — list of plugin short names resolved via `PluginMapService`
 - `claudeMd.fragments` — fragment names resolving to `claudemd/<name>.md` in the profile dir
-- `rules.files` — rule file base names resolving to `rules/<name>.md` in the profile dir
+- rule files — auto-discovered: every `*.md` in the profile's `rules/` dir is applied (no key)
 - `permissions.allow/deny` — merged into `.claude/settings.json` permissions arrays
 - `env` — environment variables; `ignore` — `.claudeignore` patterns

@@ -27,7 +27,7 @@ Jackson-annotated records/POJOs for serialization. No business logic. Key types:
 `Settings` uses an inner `Builder` class for deserialization (`@JsonDeserialize(builder=Settings.Builder.class)` + `@JsonPOJOBuilder(withPrefix="")`) to support `@JsonAnySetter` passthrough of unknown fields — records cannot carry `@JsonAnySetter` directly. Both `Settings` and `Settings.Builder` are annotated `@RegisterForReflection` (inner classes require a separate annotation for GraalVM native).
 Marketplace cluster: `MarketplaceManifest`, `MarketplacePlugin`, `MarketplaceSource`
 (with custom `MarketplaceSourceSerializer`/`Deserializer`), `PluginMapCache`.
-Profile sub-records: `ProfileMetadata`, `ProfilePlugins`, `ProfileClaudeMd`, `ProfileRules`.
+Profile sub-records: `ProfileMetadata`, `ProfilePlugins`, `ProfileClaudeMd`.
 Context sub-record: `CcxContext.ProfileRecord`.
 
 ### TUI (`me.neveux.ccx.tui`)

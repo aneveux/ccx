@@ -6,8 +6,8 @@ ccx is pre-1.0. Security fixes are applied to the latest released version only.
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.1.x   | :white_check_mark: |
-| < 0.1   | :x:                |
+| 0.3.x   | :white_check_mark: |
+| < 0.3   | :x:                |
 
 ## Reporting a vulnerability
 

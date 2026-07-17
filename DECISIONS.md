@@ -12,7 +12,7 @@ technical choice, its context, and its consequences.
 allows leveraging the existing Java/Quarkus expertise in this codebase and
 enables native binary distribution via GraalVM.
 
-**Decision:** Use Java 17+, Quarkus for the application framework, and Picocli
+**Decision:** Use Java 25, Quarkus for the application framework, and Picocli
 for CLI argument parsing.
 
 **Consequences:** Native binary via GraalVM is possible but requires
