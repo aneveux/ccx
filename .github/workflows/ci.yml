@@ -29,16 +29,30 @@ jobs:
       - name: Run tests (incremental version)
         run: mvn verify -B -Dset.changelist -Dignore.dirt
 
+  changes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      native: ${{ steps.filter.outputs.native }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            native:
+              - 'src/main/java/me/neveux/ccx/graal/**'
+              - 'src/main/resources/META-INF/native-image/**'
+              - 'pom.xml'
+
   native-smoke:
     runs-on: ubuntu-latest
+    needs: changes
     if: >
-      github.event_name == 'schedule' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-      (github.event_name == 'pull_request' && (
-        contains(github.event.pull_request.changed_files, 'src/main/java/me/neveux/ccx/graal') ||
-        contains(github.event.pull_request.changed_files, 'src/main/resources/META-INF/native-image') ||
-        contains(github.event.pull_request.changed_files, 'pom.xml')
-      ))
+      !cancelled() && (
+        github.event_name == 'schedule' ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+        (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true')
+      )
     steps:
       - uses: actions/checkout@v4
         with:
