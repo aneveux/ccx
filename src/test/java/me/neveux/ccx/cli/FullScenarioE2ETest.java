@@ -151,8 +151,8 @@ class FullScenarioE2ETest {
     }
 
     @Test
-    @DisplayName("enabling java-functional should auto-enable its java dependency and bootstrap .claudeignore")
-    void enableJavaFunctional_autoEnablesParent_andBootstrapsClaudeIgnore() {
+    @DisplayName("enabling java-functional should auto-enable its java dependency")
+    void enableJavaFunctional_autoEnablesParent() {
         var enable = run("profiles", "enable", "java-functional", "--project-dir", proj());
 
         assertThat(enable.exitCode())
@@ -173,8 +173,8 @@ class FullScenarioE2ETest {
             .contains("[ENABLED] java-functional");
 
         assertThat(projectDir.resolve(".claudeignore"))
-            .as("Wave 2A bootstrap must create .claudeignore on first enable")
-            .exists();
+            .as(".claudeignore is not a real Claude Code feature — enable must never create it")
+            .doesNotExist();
     }
 
     @Test

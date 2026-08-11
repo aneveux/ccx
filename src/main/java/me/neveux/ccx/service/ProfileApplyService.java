@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
  *   <li>Appends {@code @absPath} fragment references into the ccx block in
  *       {@code .claude/CLAUDE.md}.</li>
  *   <li>Copies command markdown files into {@code .claude/commands/}.</li>
- *   <li>Merges {@code .claudeignore} patterns, bootstrapping the file if absent.</li>
+ *   <li>Translates {@code ignore:} patterns into {@code Read(...)} deny rules and merges them
+ *       into {@code settings.json}.</li>
  *   <li>Merges environment variable entries into {@code settings.json}.</li>
  * </ol>
  *
@@ -47,9 +48,6 @@ import java.util.stream.Collectors;
 public class ProfileApplyService {
 
     private static final Logger log = LoggerFactory.getLogger(ProfileApplyService.class);
-
-    /** Default .claudeignore bootstrapped on first profile enable (migrated from the removed `init` command). */
-    static final String DEFAULT_CLAUDEIGNORE = ".git/\ntarget/\nnode_modules/\n*.class\n";
 
     private final SettingsService settingsService;
     private final ClaudeMdService claudeMdService;
@@ -102,12 +100,14 @@ public class ProfileApplyService {
 
         var writtenEnv = new LinkedHashMap<String, String>();
         s = applyEnv(s, resolved, writtenEnv);
+
+        var writtenIgnorePatterns = new ArrayList<String>();
+        s = applyIgnoreAsDenyRules(s, resolved, writtenIgnorePatterns);
         settingsService.write(s, projectRoot);
 
         var writtenRules = applyRules(resolved, projectRoot, overwrite, profileName);
         var writtenFragments = applyFragments(resolved, projectRoot, profileName);
         var writtenCommands = applyCommands(resolved, projectRoot, overwrite, profileName);
-        var writtenIgnorePatterns = applyClaudeIgnore(resolved, projectRoot);
 
         var permissionsAllow = resolved.permissions() != null && resolved.permissions().allow() != null
             ? List.copyOf(resolved.permissions().allow())
@@ -116,9 +116,9 @@ public class ProfileApplyService {
             ? List.copyOf(resolved.permissions().deny())
             : List.<String>of();
 
-        log.info("profile applied plugins={} rules={} commands={} fragments={} env={} ignore={}",
+        log.info("profile applied plugins={} rules={} commands={} fragments={} env={}",
             writtenPlugins, writtenRules, writtenCommands, writtenFragments,
-            writtenEnv.keySet(), writtenIgnorePatterns);
+            writtenEnv.keySet());
         return new CcxContext.ProfileSnapshot(
             writtenPlugins.isEmpty() ? List.of() : List.copyOf(writtenPlugins),
             writtenRules.isEmpty() ? List.of() : List.copyOf(writtenRules),
@@ -279,37 +279,66 @@ public class ProfileApplyService {
         return writtenCommands;
     }
 
-    private List<String> applyClaudeIgnore(Profile resolved, Path projectRoot) {
-        bootstrapClaudeIgnore(projectRoot);
+    /**
+     * Translates the profile's {@code ignore:} patterns into {@code Read(...)} deny rules and
+     * merges them into the {@code permissions.deny} list of {@code settings}.
+     *
+     * @param writtenIgnorePatterns collects the original patterns whose translated deny rule was
+     *                              absent before the merge, so {@link #remove} only ever undoes
+     *                              rules this profile actually contributed
+     * @return {@code settings} with the merged deny rules, or unchanged when there is nothing to add
+     */
+    private Settings applyIgnoreAsDenyRules(Settings settings, Profile resolved,
+                                            List<String> writtenIgnorePatterns) {
+        if (resolved.ignore() == null || resolved.ignore().isEmpty()) {
+            return settings;
+        }
+        var existingDeny = settings.permissions() != null && settings.permissions().deny() != null
+            ? settings.permissions().deny()
+            : List.<String>of();
 
-        var writtenIgnorePatterns = new ArrayList<String>();
-        if (resolved.ignore() != null && !resolved.ignore().isEmpty()) {
-            var claudeIgnore = projectRoot.resolve(".claudeignore");
-            List<String> existing = new ArrayList<>();
-            if (Files.exists(claudeIgnore)) {
-                try {
-                    existing = new ArrayList<>(Files.readAllLines(claudeIgnore));
-                } catch (IOException e) {
-                    log.warn("failed to read .claudeignore path={}", claudeIgnore, e);
-                }
+        var denyRules = new ArrayList<String>();
+        for (var pattern : resolved.ignore()) {
+            if (pattern == null || pattern.isBlank()) {
+                continue;
             }
-            for (var pattern : resolved.ignore()) {
-                if (pattern != null && !existing.contains(pattern)) {
-                    existing.add(pattern);
-                    writtenIgnorePatterns.add(pattern);
-                }
+            var rule = toReadDenyRule(pattern);
+            if (denyRules.contains(rule)) {
+                continue;
             }
-            if (!writtenIgnorePatterns.isEmpty()) {
-                try {
-                    var content = String.join("\n", existing) + "\n";
-                    FileUtils.atomicWrite(claudeIgnore, tmp -> Files.writeString(tmp, content));
-                    log.debug("ignore patterns written count={}", writtenIgnorePatterns.size());
-                } catch (IOException e) {
-                    log.warn("failed to write .claudeignore path={}", claudeIgnore, e);
-                }
+            denyRules.add(rule);
+            if (!existingDeny.contains(rule)) {
+                writtenIgnorePatterns.add(pattern);
             }
         }
-        return writtenIgnorePatterns;
+        if (denyRules.isEmpty()) {
+            return settings;
+        }
+        log.debug("ignore patterns translated to deny rules rules={}", denyRules);
+        return settings.withPermissions(
+            mergePermissionsList(settings.permissions(), new Permissions(null, denyRules)));
+    }
+
+    /**
+     * Maps one profile {@code ignore:} entry to the equivalent {@code settings.json} deny rule.
+     *
+     * <p>Entries already written as a tool pattern ({@code Read(...)}, {@code Write(...)},
+     * {@code Bash(...)}) pass through verbatim. Otherwise a directory pattern ({@code target/})
+     * becomes {@code Read(target/**)}, a bare glob ({@code *.class}) becomes
+     * {@code Read(**}{@code /*.class)} so it matches at any depth, and anything else is wrapped
+     * as-is ({@code .env} becomes {@code Read(.env)}).
+     */
+    private static String toReadDenyRule(String pattern) {
+        if (pattern.startsWith("Read(") || pattern.startsWith("Write(") || pattern.startsWith("Bash(")) {
+            return pattern;
+        }
+        if (pattern.endsWith("/")) {
+            return "Read(" + pattern + "**)";
+        }
+        if (pattern.contains("*") && !pattern.contains("/")) {
+            return "Read(**/" + pattern + ")";
+        }
+        return "Read(" + pattern + ")";
     }
 
     /**
@@ -433,21 +462,8 @@ public class ProfileApplyService {
             }
         }
 
-        // Remove ignore patterns
-        if (snapshot.ignorePatterns() != null && !snapshot.ignorePatterns().isEmpty()) {
-            var claudeIgnore = projectRoot.resolve(".claudeignore");
-            if (Files.exists(claudeIgnore)) {
-                try {
-                    var lines = new ArrayList<>(Files.readAllLines(claudeIgnore));
-                    lines.removeAll(snapshot.ignorePatterns());
-                    var content = String.join("\n", lines) + "\n";
-                    FileUtils.atomicWrite(claudeIgnore, tmp -> Files.writeString(tmp, content));
-                    log.debug("ignore patterns removed count={}", snapshot.ignorePatterns().size());
-                } catch (IOException e) {
-                    log.warn("failed to update .claudeignore on remove path={}", claudeIgnore, e);
-                }
-            }
-        }
+        // Remove the deny rules this profile's ignore patterns contributed
+        removeIgnoreDenyRules(snapshot, projectRoot);
 
         log.info("profile removed plugins={} rules={}", snapshot.plugins(), snapshot.rules());
     }
@@ -461,18 +477,36 @@ public class ProfileApplyService {
         }
     }
 
-    private void bootstrapClaudeIgnore(Path projectRoot) {
-        var claudeIgnore = projectRoot.resolve(".claudeignore");
-        if (Files.exists(claudeIgnore)) {
-            log.debug(".claudeignore already exists, skipping bootstrap path={}", claudeIgnore);
+    /**
+     * Deletes from {@code permissions.deny} the rules that {@link #applyIgnoreAsDenyRules} derived
+     * from the snapshot's ignore patterns, leaving {@code permissions.allow} and every other deny
+     * rule untouched.
+     */
+    private void removeIgnoreDenyRules(CcxContext.ProfileSnapshot snapshot, Path projectRoot) {
+        if (snapshot.ignorePatterns() == null || snapshot.ignorePatterns().isEmpty()) {
             return;
         }
-        try {
-            FileUtils.atomicWrite(claudeIgnore, tmp -> Files.writeString(tmp, DEFAULT_CLAUDEIGNORE));
-            log.debug(".claudeignore bootstrapped path={}", claudeIgnore);
-        } catch (IOException e) {
-            log.warn("failed to bootstrap .claudeignore path={}", claudeIgnore, e);
+        var settings = settingsService.read(projectRoot);
+        var permissions = settings.permissions();
+        if (permissions == null || permissions.deny() == null) {
+            return;
         }
+        var rulesToRemove = snapshot.ignorePatterns().stream()
+            .filter(pattern -> pattern != null && !pattern.isBlank())
+            .map(ProfileApplyService::toReadDenyRule)
+            .collect(Collectors.toSet());
+        var remainingDeny = permissions.deny().stream()
+            .filter(rule -> !rulesToRemove.contains(rule))
+            .toList();
+        if (remainingDeny.size() == permissions.deny().size()) {
+            return;
+        }
+        var deny = remainingDeny.isEmpty() ? null : remainingDeny;
+        var updated = permissions.allow() == null && deny == null
+            ? null
+            : new Permissions(permissions.allow(), deny);
+        settingsService.write(settings.withPermissions(updated), projectRoot);
+        log.debug("ignore deny rules removed rules={}", rulesToRemove);
     }
 
     private Permissions mergePermissionsList(Permissions target, Permissions source) {

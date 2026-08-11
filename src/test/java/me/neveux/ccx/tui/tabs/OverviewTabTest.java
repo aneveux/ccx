@@ -38,7 +38,6 @@ class OverviewTabTest {
             .privateClaudeMdPath("./.claude/CLAUDE.md")
             .hookCount(1)
             .globalHookCount(0)
-            .claudeIgnore(new TuiSnapshot.ClaudeIgnoreInfo(false, true, 0, 3))
             .build();
     }
 

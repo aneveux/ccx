@@ -1000,18 +1000,6 @@ class TuiDataServiceTest {
         }
 
         @Test
-        @DisplayName("overview claudeIgnore globalPresent=true when .claudeignore is at globalRoot (not inside .claude/)")
-        void claudeIgnore_globalPresentWhenAtGlobalRoot() throws Exception {
-            Files.writeString(globalRoot.resolve(".claudeignore"), "*.log\n");
-
-            var snap = service.snapshot(projectDir, globalRoot);
-
-            assertThat(snap.overview().claudeIgnore().presentGlobal())
-                .as("presentGlobal must be true when .claudeignore is at globalRoot directly")
-                .isTrue();
-        }
-
-        @Test
         @DisplayName("overview.privateClaudeMdPath is non-null when .claude/CLAUDE.md exists")
         void overview_privateClaudeMdPath_nonNullWhenFileExists() throws Exception {
             var privateClaudeDir = projectDir.resolve(".claude");

@@ -92,7 +92,6 @@ public class DoctorCommand implements Callable<Integer> {
             checkSkillOverrides(settingsResult.settings(), out);
             checkRulesDir(dir, out);
         }
-        checkClaudeIgnore(dir, out);
         hasErrors |= checkDependencies(out);
         var globalRoot = globalDir != null ? globalDir : Path.of(System.getProperty("user.home"));
         hasErrors |= checkGlobalSettings(globalRoot, out);
@@ -200,15 +199,6 @@ public class DoctorCommand implements Callable<Integer> {
             emit(out, "[INFO] rules: .claude/rules/ — " + rulesCount + " file(s)");
         } else {
             emit(out, "[INFO] no rules directory (.claude/rules/ absent)");
-        }
-    }
-
-    private void checkClaudeIgnore(Path dir, PrintWriter out) {
-        var claudeIgnore = dir.resolve(".claudeignore");
-        if (Files.exists(claudeIgnore)) {
-            emit(out, "[OK] .claudeignore present");
-        } else {
-            emit(out, "[INFO] .claudeignore absent");
         }
     }
 

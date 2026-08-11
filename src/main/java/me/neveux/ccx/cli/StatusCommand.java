@@ -21,8 +21,8 @@ import java.util.concurrent.Callable;
 
 /**
  * Prints a concise overview of the current project's ccx state: enabled plugins,
- * CLAUDE.md stack references, skill overrides, MCP servers, {@code .claudeignore}
- * presence, and rule files. With {@code --full} also shows the global
+ * CLAUDE.md stack references, skill overrides, MCP servers, and rule files.
+ * With {@code --full} also shows the global
  * ({@code ~/.claude}) configuration alongside the project view.
  */
 @Command(name = "status", description = "Show current ccx configuration status")
@@ -83,22 +83,6 @@ public class StatusCommand implements Callable<Integer> {
         out.println(CliFormat.dim("MCP servers:"));
         printItems(out, mcpServers);
 
-        // .claudeignore
-        var claudeIgnore = dir.resolve(".claudeignore");
-        var claudeIgnorePresent = Files.exists(claudeIgnore);
-        if (claudeIgnorePresent) {
-            long entryCount;
-            try (var lines = Files.lines(claudeIgnore)) {
-                entryCount = lines.filter(l -> !l.isBlank() && !l.startsWith("#")).count();
-            } catch (IOException e) {
-                log.warn("could not count .claudeignore entries path={}", claudeIgnore, e);
-                entryCount = 0;
-            }
-            out.println(".claudeignore: " + CliFormat.green("present") + " (" + entryCount + " entries)");
-        } else {
-            out.println(".claudeignore: " + CliFormat.dim("absent"));
-        }
-
         // Rules files
         var rulesDir = dir.resolve(".claude/rules");
         var hasRulesFiles = false;
@@ -119,7 +103,7 @@ public class StatusCommand implements Callable<Integer> {
         }
 
         var projectEmpty = isEmpty(enabledPlugins) && stacks.isEmpty() && isEmpty(skillOverrides)
-            && isEmpty(mcpServers) && !claudeIgnorePresent && !hasRulesFiles;
+            && isEmpty(mcpServers) && !hasRulesFiles;
 
         var globalEmpty = true;
         if (full) {

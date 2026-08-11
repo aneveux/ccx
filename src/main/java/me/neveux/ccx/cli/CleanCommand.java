@@ -25,9 +25,10 @@ import java.util.concurrent.Callable;
 /**
  * Removes all ccx-managed configuration from a project directory: the ccx
  * marker block in {@code .claude/CLAUDE.md}, enabled plugins in
- * {@code settings.json}, {@code .claudeignore}, and the {@code .claude/rules/}
- * directory. Without {@code --force} (or when no TTY is available) it performs
- * a dry run, printing what would be removed.
+ * {@code settings.json}, the {@code .claude/rules/} directory, and any legacy
+ * {@code .claudeignore} (no longer managed by ccx; deleted so files written by
+ * older versions get cleaned up). Without {@code --force} (or when no TTY is
+ * available) it performs a dry run, printing what would be removed.
  */
 @Command(name = "clean", description = "Remove ccx-managed configuration from project")
 @Dependent

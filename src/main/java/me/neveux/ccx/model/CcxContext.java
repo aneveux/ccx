@@ -44,7 +44,8 @@ public record CcxContext(
      * @param commands          slash-command entries
      * @param fragments         CLAUDE.md fragment paths
      * @param env               environment variable overrides
-     * @param ignorePatterns    file patterns added to the ignore list
+     * @param ignorePatterns    {@code ignore} patterns applied as {@code Read(...)} deny rules,
+     *                          recorded for removal tracking
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ProfileSnapshot(

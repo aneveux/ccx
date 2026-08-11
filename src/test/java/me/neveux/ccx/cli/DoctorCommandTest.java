@@ -177,40 +177,6 @@ class DoctorCommandTest {
     }
 
     @Nested
-    @DisplayName("when .claudeignore is present")
-    class WhenClaudeIgnorePresent {
-
-        @Test
-        @DisplayName("should report [OK] .claudeignore present")
-        void doctor_reportsClaudeIgnorePresent() throws Exception {
-            Files.writeString(tempDir.resolve(".claudeignore"), ".git/\ntarget/\n");
-
-            var result = run("doctor", "--project-dir", tempDir.toString());
-
-            assertThat(result.exitCode()).isZero();
-            assertThat(result.output())
-                .as("doctor must report [OK] when .claudeignore exists")
-                .contains("[OK] .claudeignore present");
-        }
-    }
-
-    @Nested
-    @DisplayName("when .claudeignore is absent")
-    class WhenClaudeIgnoreAbsent {
-
-        @Test
-        @DisplayName("should report [INFO] .claudeignore absent")
-        void doctor_reportsClaudeIgnoreAbsent() {
-            var result = run("doctor", "--project-dir", tempDir.toString());
-
-            assertThat(result.exitCode()).isZero();
-            assertThat(result.output())
-                .as("doctor must report [INFO] when .claudeignore is absent")
-                .contains("[INFO] .claudeignore absent");
-        }
-    }
-
-    @Nested
     @DisplayName("when global settings are present")
     class WhenGlobalSettingsPresent {
 

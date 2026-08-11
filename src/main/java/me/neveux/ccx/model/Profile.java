@@ -25,7 +25,8 @@ import java.util.Map;
  * @param permissions tool-use permission allow/deny lists
  * @param claudeMd   CLAUDE.md fragment paths to compose
  * @param env        environment variable overrides
- * @param ignore     file patterns to add to the Claude Code ignore list
+ * @param ignore     file path patterns applied as {@code Read(...)} deny rules in
+ *                   {@code .claude/settings.json}
  */
 @RegisterForReflection
 @JsonIgnoreProperties(ignoreUnknown = true)

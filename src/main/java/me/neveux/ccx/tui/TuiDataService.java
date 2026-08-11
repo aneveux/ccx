@@ -372,8 +372,6 @@ public class TuiDataService {
             .filter(p -> p.status() == TuiSnapshot.PluginStatus.GLOBALLY_ENABLED)
             .count();
 
-        var claudeIgnore = buildClaudeIgnoreInfo(projectDir, globalRoot);
-
         var projectClaudeMd = projectDir.resolve("CLAUDE.md");
         var globalClaudeMd = globalRoot.resolve(".claude/CLAUDE.md");
 
@@ -415,7 +413,6 @@ public class TuiDataService {
             .projectPluginCount(projectPluginCount)
             .globalPluginCount(globalPluginCount)
             .mcpCount(mcps.size())
-            .claudeIgnore(claudeIgnore)
             .hookCount(settings.hooks() != null ? settings.hooks().size() : 0)
             .projectPluginNames(pluginNames.projectNames())
             .globalPluginNames(pluginNames.globalNames())
@@ -428,16 +425,6 @@ public class TuiDataService {
             .fragmentNames(fragmentNames)
             .mcpServerNames(mcpServerNames)
             .build();
-    }
-
-    private TuiSnapshot.ClaudeIgnoreInfo buildClaudeIgnoreInfo(Path projectDir, Path globalRoot) {
-        var globalClaudeIgnorePath = globalRoot.resolve(".claudeignore");
-        var projectClaudeIgnorePath = projectDir.resolve(".claudeignore");
-        var presentGlobal = Files.exists(globalClaudeIgnorePath);
-        var presentProject = Files.exists(projectClaudeIgnorePath);
-        var globalEntryCount = countFileLines(globalClaudeIgnorePath);
-        var projectEntryCount = countFileLines(projectClaudeIgnorePath);
-        return new TuiSnapshot.ClaudeIgnoreInfo(presentGlobal, presentProject, globalEntryCount, projectEntryCount);
     }
 
     private record PluginNameLists(List<String> projectNames, List<String> globalNames) {}
@@ -454,16 +441,6 @@ public class TuiDataService {
             .sorted()
             .toList();
         return new PluginNameLists(projectNames, globalNames);
-    }
-
-    private int countFileLines(Path file) {
-        if (!Files.exists(file)) return 0;
-        try (var lines = Files.lines(file)) {
-            return (int) lines.filter(l -> !l.isBlank() && !l.startsWith("#")).count();
-        } catch (IOException e) {
-            log.warn("failed to count file lines path={}", file, e);
-            return 0;
-        }
     }
 
     private List<String> listFileNames(Path dir) {

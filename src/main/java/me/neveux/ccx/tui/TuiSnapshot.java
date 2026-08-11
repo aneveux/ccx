@@ -20,7 +20,6 @@ import java.util.Map;
  *   <li>{@link McpEntry} — a named MCP server and its configuration</li>
  *   <li>{@link StackEntry} — one line from the CLAUDE.md marker block, with source classification</li>
  *   <li>{@link OverviewData} — aggregate counts and file-presence flags for the Overview tab</li>
- *   <li>{@link ClaudeIgnoreInfo} — presence and line counts of project/global {@code .claudeignore}</li>
  * </ul>
  */
 public record TuiSnapshot(
@@ -75,7 +74,6 @@ public record TuiSnapshot(
         int projectPluginCount,
         int globalPluginCount,
         int mcpCount,
-        ClaudeIgnoreInfo claudeIgnore,
         int hookCount,
         List<String> projectPluginNames,
         List<String> globalPluginNames,
@@ -98,7 +96,6 @@ public record TuiSnapshot(
             private int projectPluginCount = 0;
             private int globalPluginCount = 0;
             private int mcpCount = 0;
-            private ClaudeIgnoreInfo claudeIgnore = new ClaudeIgnoreInfo(false, false, 0, 0);
             private int hookCount = 0;
             private List<String> projectPluginNames = List.of();
             private List<String> globalPluginNames = List.of();
@@ -116,7 +113,6 @@ public record TuiSnapshot(
             public Builder projectPluginCount(int v) { this.projectPluginCount = v; return this; }
             public Builder globalPluginCount(int v) { this.globalPluginCount = v; return this; }
             public Builder mcpCount(int v) { this.mcpCount = v; return this; }
-            public Builder claudeIgnore(ClaudeIgnoreInfo v) { this.claudeIgnore = v; return this; }
             public Builder hookCount(int v) { this.hookCount = v; return this; }
             public Builder projectPluginNames(List<String> v) { this.projectPluginNames = v; return this; }
             public Builder globalPluginNames(List<String> v) { this.globalPluginNames = v; return this; }
@@ -132,7 +128,7 @@ public record TuiSnapshot(
             public OverviewData build() {
                 return new OverviewData(
                     enabledProfileNames, profileDriftStates, projectPluginCount, globalPluginCount,
-                    mcpCount, claudeIgnore, hookCount,
+                    mcpCount, hookCount,
                     projectPluginNames, globalPluginNames, rulesFileNames, contextFilePath,
                     projectClaudeMdPath, globalClaudeMdPath, globalHookCount,
                     privateClaudeMdPath, fragmentNames, mcpServerNames
@@ -140,14 +136,6 @@ public record TuiSnapshot(
             }
         }
     }
-
-    /** Presence and non-comment line counts for project-level and global {@code .claudeignore} files. */
-    public record ClaudeIgnoreInfo(
-        boolean presentGlobal,
-        boolean presentProject,
-        int globalEntryCount,
-        int projectEntryCount
-    ) {}
 
     public enum PluginStatus   { PROJECT_ENABLED, GLOBALLY_ENABLED, AVAILABLE }
 

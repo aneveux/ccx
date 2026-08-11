@@ -110,18 +110,15 @@ public final class OverviewTab {
                     new SubBlock(" Fragments ", fragmentsBody),
                     new SubBlock(" Rules Files ", rulesBody)))));
 
-        // 5. Config row 2 — MCP Servers | Hooks | .claudeignore
+        // 5. Config row 2 — MCP Servers | Hooks
         var mcpBody = mcpBody(ov);
         var hooksBody = hooksBody(ov);
-        var ignoreBody = ignoreBody(ov);
-        int row2Body = Math.max(linesOf(mcpBody),
-            Math.max(linesOf(hooksBody), linesOf(ignoreBody)));
+        int row2Body = Math.max(linesOf(mcpBody), linesOf(hooksBody));
         sections.add(new Section("Config2", row2Body + 4,
             (scratch, area) -> renderSplitBlock(scratch, area, null,
                 List.of(
                     new SubBlock(" MCP Servers ", mcpBody),
-                    new SubBlock(" Hooks ", hooksBody),
-                    new SubBlock(" .claudeignore ", ignoreBody)))));
+                    new SubBlock(" Hooks ", hooksBody)))));
 
         return sections;
     }
@@ -188,16 +185,6 @@ public final class OverviewTab {
     private String hooksBody(TuiSnapshot.OverviewData ov) {
         if (ov.hookCount() == 0 && ov.globalHookCount() == 0) return Quips.EMPTY[0];
         return "- project " + ov.hookCount() + "\n- global " + ov.globalHookCount() + "\n";
-    }
-
-    private String ignoreBody(TuiSnapshot.OverviewData ov) {
-        var ci = ov.claudeIgnore();
-        var sb = new StringBuilder();
-        sb.append("- ").append(ci.presentProject() ? Glyphs.ENABLED : Glyphs.AVAILABLE)
-          .append(" project (").append(ci.projectEntryCount()).append(")\n");
-        sb.append("- ").append(ci.presentGlobal() ? Glyphs.ENABLED : Glyphs.AVAILABLE)
-          .append(" global (").append(ci.globalEntryCount()).append(")\n");
-        return sb.toString();
     }
 
     private String listBody(List<String> names) {

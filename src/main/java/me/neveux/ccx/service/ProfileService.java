@@ -30,7 +30,7 @@ import java.util.Set;
  *
  * <p>Profiles may declare an {@code extends} list to inherit from one or more parent
  * profiles. {@link #loadAndResolve} walks the full inheritance tree, merges plugins,
- * permissions, rules, env vars, and {@code .claudeignore} patterns in depth-first order,
+ * permissions, rules, env vars, and {@code ignore} patterns in depth-first order,
  * and returns a single flat {@link me.neveux.ccx.model.Profile}. Cycles in the
  * inheritance graph throw {@link ProfileCycleException}.
  */

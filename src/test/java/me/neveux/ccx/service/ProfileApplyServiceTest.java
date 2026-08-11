@@ -236,24 +236,25 @@ class ProfileApplyServiceTest {
         }
 
         @Test
-        @DisplayName("should append ignore patterns to .claudeignore")
-        void apply_appendsIgnorePatterns() throws Exception {
+        @DisplayName("should append ignore patterns to settings.json permissions.deny")
+        void apply_appendsIgnorePatterns() {
             var profile = new Profile()
                 .withIgnore(List.of("target/", ".mvn/"));
 
             service.apply(profile, tempDir);
 
-            var claudeIgnore = tempDir.resolve(".claudeignore");
-            assertThat(claudeIgnore)
-                .as(".claudeignore must be created when profile has ignore patterns")
-                .exists();
-            var content = Files.readString(claudeIgnore);
-            assertThat(content)
-                .as(".claudeignore must contain target/ pattern")
-                .contains("target/");
-            assertThat(content)
-                .as(".claudeignore must contain .mvn/ pattern")
-                .contains(".mvn/");
+            assertThat(tempDir.resolve(".claudeignore"))
+                .as(".claudeignore is not a real Claude Code feature — it must never be created")
+                .doesNotExist();
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("settings.permissions must not be null when the profile has ignore patterns")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("target/ must translate to the Read(target/**) deny rule")
+                .contains("Read(target/**)")
+                .as(".mvn/ must translate to the Read(.mvn/**) deny rule")
+                .contains("Read(.mvn/**)");
         }
 
         @Test
@@ -391,48 +392,6 @@ class ProfileApplyServiceTest {
     }
 
     // -----------------------------------------------------------------------
-    // .claudeignore bootstrap (migrated from the removed `init` command)
-    // -----------------------------------------------------------------------
-
-    @Nested
-    @DisplayName(".claudeignore bootstrap on enable")
-    class ClaudeIgnoreBootstrap {
-
-        @Test
-        @DisplayName("should create a default .claudeignore on first enable")
-        void apply_createsDefaultClaudeIgnore_onFirstEnable() throws Exception {
-            var resolved = resolvedJavaProfile();
-
-            service.apply(resolved, tempDir);
-
-            var claudeIgnore = tempDir.resolve(".claudeignore");
-            assertThat(claudeIgnore)
-                .as("first enable must bootstrap a default .claudeignore")
-                .exists();
-            assertThat(Files.readString(claudeIgnore))
-                .as("default .claudeignore must contain the standard ignore entries")
-                .contains("target/")
-                .contains("node_modules/")
-                .contains("*.class");
-        }
-
-        @Test
-        @DisplayName("should not overwrite an existing .claudeignore on a second enable")
-        void apply_doesNotOverwriteExistingClaudeIgnore() throws Exception {
-            var claudeIgnore = tempDir.resolve(".claudeignore");
-            Files.writeString(claudeIgnore, "custom-user-pattern/\n");
-
-            var resolved = resolvedJavaProfile();
-            service.apply(resolved, tempDir);
-
-            assertThat(Files.readString(claudeIgnore))
-                .as("an existing .claudeignore must be preserved verbatim — never overwritten by bootstrap")
-                .contains("custom-user-pattern/")
-                .doesNotContain("node_modules/");
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // remove()
     // -----------------------------------------------------------------------
 
@@ -541,10 +500,11 @@ class ProfileApplyServiceTest {
         }
 
         @Test
-        @DisplayName("should remove only snapshot ignore patterns, leaving other patterns intact")
-        void remove_removesOnlySnapshotIgnorePatterns() throws Exception {
-            var claudeIgnore = tempDir.resolve(".claudeignore");
-            Files.writeString(claudeIgnore, "target/\n.mvn/\nmanual-pattern/\n");
+        @DisplayName("should remove only snapshot ignore deny rules, leaving other deny rules intact")
+        void remove_removesOnlySnapshotIgnorePatterns() {
+            var permissions = new Permissions(null,
+                List.of("Read(target/**)", "Read(.mvn/**)", "Read(manual-pattern/**)"));
+            settingsService.write(new Settings().withPermissions(permissions), tempDir);
 
             var snapshot = new CcxContext.ProfileSnapshot(
                 List.of(), List.of(), List.of(), List.of(),
@@ -554,10 +514,15 @@ class ProfileApplyServiceTest {
 
             service.remove(snapshot, tempDir);
 
-            var content = Files.readString(claudeIgnore);
-            assertThat(content).as("manual-pattern/ must survive").contains("manual-pattern/");
-            assertThat(content).as("target/ must be removed").doesNotContain("target/");
-            assertThat(content).as(".mvn/ must be removed").doesNotContain(".mvn/");
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must survive remove — unrelated deny rules are still present")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("Read(manual-pattern/**) was not derived from a snapshot pattern — it must survive")
+                .contains("Read(manual-pattern/**)")
+                .as("Read(target/**) and Read(.mvn/**) came from snapshot patterns — both must be removed")
+                .doesNotContain("Read(target/**)", "Read(.mvn/**)");
         }
 
         @Test
