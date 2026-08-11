@@ -341,6 +341,24 @@ class TuiActionsTest {
                 .containsKey("java");
         }
 
+        @Test
+        @DisplayName("should skip a closure member that is already enabled, leaving its record untouched")
+        void enableProfile_alreadyEnabledMember_isSkipped() {
+            profileActions.enableProfile("java", projectDir);
+            var firstEnabledAt = new CcxContextService().read(projectDir)
+                .enabledProfiles().get("java").enabledAt();
+
+            profileActions.enableProfile("java-cli", projectDir);
+
+            var context = new CcxContextService().read(projectDir);
+            assertThat(context.enabledProfiles().get("java").enabledAt())
+                .as("an already-enabled closure member must be skipped, not re-applied and re-stamped")
+                .isEqualTo(firstEnabledAt);
+            assertThat(profileActions.consumeLastError())
+                .as("skipping an already-enabled member is silent — it is not a TUI error")
+                .isNull();
+        }
+
         private com.fasterxml.jackson.databind.ObjectMapper buildYamlMapper() {
             var mapper = new com.fasterxml.jackson.databind.ObjectMapper(
                 new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());

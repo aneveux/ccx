@@ -250,6 +250,17 @@ The translation is purely syntactic:
 An entry already written as `Read(...)`, `Write(...)`, or `Bash(...)` passes through
 verbatim, so you can bypass the auto-wrapping when you want exact control.
 
+Two things to know about the rules this produces:
+
+- **They are unanchored on purpose.** `Read(target/**)` has no leading `/`, so Claude Code
+  resolves it relative to the current directory and, for a single-segment directory pattern
+  in a deny rule, matches a `target` directory at *any* depth beneath it. `Read(/target/**)`
+  would pin it to the project root only. Unanchored is the broader deny, which is what you
+  want from an ignore list. Write `Read(/target/**)` yourself if you need the narrow form.
+- **They cover reads and edits, not writes.** A `Read(...)` deny rule blocks the Read and Edit
+  tools on the matched path, and does not apply to a file touched by an arbitrary subprocess
+  (`Bash(cat …)`). Add an explicit `Write(...)` or `Bash(...)` deny entry if you need those too.
+
 ### `.ccx/context.json`
 
 ccx tracks which profiles are enabled and an installation snapshot per profile so

@@ -13,6 +13,8 @@ import io.quarkus.arc.Unremovable;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.Dependent;
 import jakarta.inject.Inject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -30,7 +32,7 @@ import java.util.function.Supplier;
  * Manages ccx profiles — named, reusable collections of plugins, rules, env vars,
  * permissions, and CLAUDE.md fragments stored under the user-level ccx config
  * directory. Enables/disables profiles per project, tracks applied state in
- * {@code .claude/context.json}, and detects drift when a profile's definition
+ * {@code .ccx/context.json}, and detects drift when a profile's definition
  * has changed since it was last applied.
  */
 @Command(
@@ -97,7 +99,7 @@ public class ProfilesCommand implements Runnable {
     @RegisterForReflection
     static class ShowCommand implements Callable<Integer> {
 
-        private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ShowCommand.class);
+        private static final Logger log = LoggerFactory.getLogger(ShowCommand.class);
 
         @Inject
         ProfileService profileService;

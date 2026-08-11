@@ -5,6 +5,7 @@ import me.neveux.ccx.model.Permissions;
 import me.neveux.ccx.model.Profile;
 import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.util.FileUtils;
+import me.neveux.ccx.util.IgnorePatterns;
 import me.neveux.ccx.util.ListUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -27,19 +28,24 @@ import java.util.stream.Collectors;
  * Applies a resolved {@link me.neveux.ccx.model.Profile} to a project directory, and
  * conversely removes one when a profile is disabled.
  *
- * <p>On {@link #apply}, the service:
+ * <p>On {@link #apply}, the service performs the {@code settings.json} steps first, in this
+ * order, threading one {@link Settings} value through them and writing it once:
  * <ol>
  *   <li>Enables each plugin in {@code .claude/settings.json} (resolving short names via
  *       {@link PluginMapService}).</li>
- *   <li>Merges {@code allow}/{@code deny} permission lists into {@code settings.json}.</li>
+ *   <li>Merges {@code allow}/{@code deny} permission lists.</li>
+ *   <li>Merges environment variable entries.</li>
+ *   <li>Translates {@code ignore:} patterns into {@code Read(...)} deny rules and merges them.</li>
+ * </ol>
+ * <p>Then the filesystem steps, each writing its own files:
+ * <ol start="5">
  *   <li>Copies rule markdown files from the profile directory into {@code .claude/rules/}.</li>
  *   <li>Appends {@code @absPath} fragment references into the ccx block in
  *       {@code .claude/CLAUDE.md}.</li>
  *   <li>Copies command markdown files into {@code .claude/commands/}.</li>
- *   <li>Translates {@code ignore:} patterns into {@code Read(...)} deny rules and merges them
- *       into {@code settings.json}.</li>
- *   <li>Merges environment variable entries into {@code settings.json}.</li>
  * </ol>
+ * <p>A new {@code settings.json} step must be ordered before the single
+ * {@link SettingsService#write} call, or it is silently dropped.
  *
  * <p>On {@link #remove}, every resource recorded in the profile snapshot is undone,
  * skipping any resource that is still claimed by another active sibling profile.
@@ -73,19 +79,22 @@ public class ProfileApplyService {
     }
 
     /**
-     * Applies the resolved profile to the project, overwriting existing files where
-     * conflicts arise. Equivalent to {@link #apply(Profile, Path, boolean) apply(resolved, projectRoot, true)}.
+     * Test-only convenience: applies the resolved profile with no recorded context, overwriting
+     * existing files where conflicts arise. Package-private on purpose — production callers must
+     * use {@link #apply(Profile, Path, boolean, CcxContext)}, because an empty context makes every
+     * already-present deny rule look user-owned and strands it on the next disable.
      *
      * @param resolved    the fully merged profile to apply
      * @param projectRoot root of the project to configure
      * @return a snapshot of all resources written, for recording in the context file
      */
-    public CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot) {
+    CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot) {
         return apply(resolved, projectRoot, true);
     }
 
     /**
-     * Applies the resolved profile to the project.
+     * Test-only convenience: applies the resolved profile with no recorded context.
+     * Package-private on purpose — see {@link #apply(Profile, Path)}.
      *
      * @param resolved    the fully merged profile to apply
      * @param projectRoot root of the project to configure
@@ -93,8 +102,8 @@ public class ProfileApplyService {
      *                    when {@code false}, they are kept and still included in the snapshot
      * @return a snapshot of all resources written, for recording in the context file
      */
-    public CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot, boolean overwrite) {
-        return apply(resolved, projectRoot, overwrite, new CcxContext("1", Map.of()));
+    CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot, boolean overwrite) {
+        return apply(resolved, projectRoot, overwrite, CcxContext.empty());
     }
 
     /**
@@ -126,9 +135,9 @@ public class ProfileApplyService {
         s = applyIgnoreAsDenyRules(s, resolved, writtenIgnorePatterns, ccxOwnedDenyRules(context));
         settingsService.write(s, projectRoot);
 
-        var writtenRules = applyRules(resolved, projectRoot, overwrite, profileName);
-        var writtenFragments = applyFragments(resolved, projectRoot, profileName);
-        var writtenCommands = applyCommands(resolved, projectRoot, overwrite, profileName);
+        var writtenRules = applyRules(projectRoot, overwrite, profileName);
+        var writtenFragments = applyFragments(projectRoot, profileName);
+        var writtenCommands = applyCommands(projectRoot, overwrite, profileName);
 
         var permissionsAllow = resolved.permissions() != null && resolved.permissions().allow() != null
             ? List.copyOf(resolved.permissions().allow())
@@ -184,7 +193,7 @@ public class ProfileApplyService {
         return s;
     }
 
-    private List<String> applyRules(Profile resolved, Path projectRoot, boolean overwrite, String profileName) {
+    private List<String> applyRules(Path projectRoot, boolean overwrite, String profileName) {
         var writtenRules = new ArrayList<String>();
         if (profileName != null) {
             var rulesSourceDir = ccxConfigService.profileDir(profileName).resolve("rules");
@@ -227,7 +236,7 @@ public class ProfileApplyService {
         return writtenRules;
     }
 
-    private List<String> applyFragments(Profile resolved, Path projectRoot, String profileName) {
+    private List<String> applyFragments(Path projectRoot, String profileName) {
         var claudeMd = projectRoot.resolve(".claude/CLAUDE.md");
         var existingLines = new ArrayList<>(claudeMdService.readMarkerBlock(claudeMd));
         var writtenFragments = new ArrayList<String>();
@@ -258,7 +267,7 @@ public class ProfileApplyService {
         return writtenFragments;
     }
 
-    private List<String> applyCommands(Profile resolved, Path projectRoot, boolean overwrite, String profileName) {
+    private List<String> applyCommands(Path projectRoot, boolean overwrite, String profileName) {
         var writtenCommands = new ArrayList<String>();
         if (profileName != null) {
             var commandsSourceDir = ccxConfigService.profileDir(profileName).resolve("commands");
@@ -326,7 +335,7 @@ public class ProfileApplyService {
                 continue;
             }
             var pattern = rawPattern.strip();
-            var rule = toReadDenyRule(pattern);
+            var rule = IgnorePatterns.toReadDenyRule(pattern);
             if (denyRules.contains(rule)) {
                 continue;
             }
@@ -359,32 +368,8 @@ public class ProfileApplyService {
             .filter(Objects::nonNull)
             .flatMap(List::stream)
             .filter(pattern -> pattern != null && !pattern.isBlank())
-            .map(ProfileApplyService::toReadDenyRule)
+            .map(IgnorePatterns::toReadDenyRule)
             .collect(Collectors.toSet());
-    }
-
-    /**
-     * Maps one profile {@code ignore:} entry to the equivalent {@code settings.json} deny rule.
-     *
-     * <p>Entries already written as a tool pattern ({@code Read(...)}, {@code Write(...)},
-     * {@code Bash(...)}) pass through verbatim. Otherwise a directory pattern ({@code target/})
-     * becomes {@code Read(target/**)}, a bare glob ({@code *.class}) becomes
-     * {@code Read(**}{@code /*.class)} so it matches at any depth, and anything else is wrapped
-     * as-is ({@code .env} becomes {@code Read(.env)}). Surrounding whitespace is stripped first:
-     * {@code "target/ "} would otherwise yield {@code Read(target/ **)}, a rule matching nothing.
-     */
-    private static String toReadDenyRule(String rawPattern) {
-        var pattern = rawPattern.strip();
-        if (pattern.startsWith("Read(") || pattern.startsWith("Write(") || pattern.startsWith("Bash(")) {
-            return pattern;
-        }
-        if (pattern.endsWith("/")) {
-            return "Read(" + pattern + "**)";
-        }
-        if (pattern.contains("*") && !pattern.contains("/")) {
-            return "Read(**/" + pattern + ")";
-        }
-        return "Read(" + pattern + ")";
     }
 
     /**
@@ -539,7 +524,7 @@ public class ProfileApplyService {
         }
         var rulesToRemove = snapshot.ignorePatterns().stream()
             .filter(pattern -> pattern != null && !pattern.isBlank())
-            .map(ProfileApplyService::toReadDenyRule)
+            .map(IgnorePatterns::toReadDenyRule)
             .collect(Collectors.toSet());
         var remainingDeny = permissions.deny().stream()
             .filter(rule -> !rulesToRemove.contains(rule))

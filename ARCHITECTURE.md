@@ -44,8 +44,10 @@ Tamboui-based interactive terminal dashboard launched by `TuiCommand`. Architect
 `NativeConfig` registers classes that require reflection at build time via `@RegisterForReflection`. Also declares `initialize-at-run-time` entries for JLine/JNA native backend classes that cannot be initialized at image build time.
 
 ### Util (`me.neveux.ccx.util`)
-Stateless static helpers: `FileUtils.atomicWrite` (write-to-.tmp then `Files.move ATOMIC_MOVE`)
-and `ListUtils.orderedUnion` (null-safe ordered dedup of two lists).
+Stateless static helpers: `FileUtils.atomicWrite` (write-to-.tmp then `Files.move ATOMIC_MOVE`),
+`ListUtils.orderedUnion` (null-safe ordered dedup of two lists), and
+`IgnorePatterns.toReadDenyRule` (profile `ignore:` pattern → `permissions.deny` rule, shared by
+`ProfileApplyService` and `CcxContextService` so apply and drift detection cannot disagree).
 
 ### Config (`me.neveux.ccx.config`)
 CDI producer class `ObjectMapperConfig`: produces `@Named("jsonMapper")` (Jackson JSON) and
@@ -95,17 +97,20 @@ Dependency direction: `cli → service → model`. The `tui` package depends on 
 ### CLI command: `ccx profiles enable java --project-dir .`
 
 1. Picocli parses args → routes to `ProfilesCommand.EnableCommand.call()`
-2. `ProfileService.load("java")` → reads `~/.config/ccx/profiles/java/profile.yaml` from disk
-3. `ProfileService.resolve(profile)` → merges multi-level inheritance chain
-4. `ProfileApplyService.apply(resolved, dir, false)`:
+2. `ProfileService.load("java")` → reads `~/.config/ccx/profiles/java/profile.yaml` from disk (validates the leaf exists before anything is written)
+3. `ProfileService.resolveDependencyClosure("java")` → the `extends` closure in dependency-first order, leaf last. Each member is then `load()`ed and applied individually — a member already recorded in `.ccx/context.json` is skipped, so re-enabling never re-stamps an existing record
+4. `ProfileApplyService.apply(member, dir, false, context)` per member:
    - Reads existing `settings.json` via `SettingsService.read()`
    - Adds plugin keys to `enabledPlugins`
    - Merges permissions
-   - Writes updated `settings.json` atomically
+   - Merges `env` entries
+   - Translates `ignore:` patterns into `permissions.deny` rules via `IgnorePatterns.toReadDenyRule` (see ADR-014)
+   - Writes updated `settings.json` atomically — one write, so any new settings step must be ordered before it
    - Writes rule files to `.claude/rules/` atomically
-   - Writes fragment lines to `CLAUDE.md` marker block atomically
+   - Writes fragment lines to `.claude/CLAUDE.md` marker block atomically
+   - Writes command files to `.claude/commands/` atomically
    - Returns `ProfileSnapshot` (what was written)
-5. `CcxContextService.recordEnabled("java", snapshot, dir)`:
+5. `CcxContextService.recordEnabled(member, snapshot, dir)`:
    - Reads `.ccx/context.json`
    - Adds the profile record with timestamp + snapshot
    - Writes `.ccx/context.json` atomically
@@ -127,7 +132,7 @@ Dependency direction: `cli → service → model`. The `tui` package depends on 
 - **All file writes are atomic** — write to `.tmp` sibling, then `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`
 - **`settings.json` is the source of truth** for plugins, permissions, MCP servers, and skill overrides
 - **`.ccx/context.json` tracks profile membership** — NOT `.claude/` (that belongs to Claude Code)
-- **Profiles live on disk under `~/.config/ccx/profiles/<name>/profile.yaml`** — there are no bundled classpath profiles (`src/main/resources/profiles/` is empty); users author their own
+- **Profiles live on disk under `~/.config/ccx/profiles/<name>/profile.yaml`** — there are no bundled classpath profiles (`src/main/resources/` holds only `application.properties` and `META-INF/`); users author their own
 - **Path boundary checks** — all user-supplied paths (e.g. `--project-dir`, `--output`, marketplace paths) are validated to stay within `user.home`, `user.dir`, or `java.io.tmpdir`
 
 ## PathSecurity

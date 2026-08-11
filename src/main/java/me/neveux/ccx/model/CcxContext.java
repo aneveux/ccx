@@ -20,6 +20,14 @@ public record CcxContext(
     String version,
     Map<String, ProfileRecord> enabledProfiles
 ) {
+    /** Format version written into every new context file. Bump when the schema changes. */
+    public static final String FORMAT_VERSION = "1";
+
+    /** A context with no profiles enabled, stamped with the current {@link #FORMAT_VERSION}. */
+    public static CcxContext empty() {
+        return new CcxContext(FORMAT_VERSION, Map.of());
+    }
+
     /**
      * Records the moment a profile was enabled and the configuration snapshot
      * that was written into {@code .claude/settings.json} at that time.

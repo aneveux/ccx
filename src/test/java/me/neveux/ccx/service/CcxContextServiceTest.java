@@ -1,6 +1,7 @@
 package me.neveux.ccx.service;
 
 import me.neveux.ccx.model.CcxContext;
+import me.neveux.ccx.model.Permissions;
 import me.neveux.ccx.model.ProfileDriftState;
 import me.neveux.ccx.model.Settings;
 import org.junit.jupiter.api.BeforeEach;
@@ -356,6 +357,124 @@ class CcxContextServiceTest {
 
             assertThat(result)
                 .as("detectDrift must return ALTERED when plugin is mapped to false (not Boolean.TRUE)")
+                .isEqualTo(ProfileDriftState.ALTERED);
+        }
+
+        @Test
+        @DisplayName("should return ALTERED when a command file is missing from commands/ directory")
+        void detectDrift_returnsAltered_whenCommandFileMissing() throws Exception {
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of("my-command"), null, null, null
+            );
+            // Do NOT create commands/my-command.md
+
+            var result = service.detectDrift("test", snapshot, new Settings(), claudeDir, List.of());
+
+            assertThat(result)
+                .as("detectDrift must return ALTERED when a recorded command file is missing from disk")
+                .isEqualTo(ProfileDriftState.ALTERED);
+        }
+
+        @Test
+        @DisplayName("should return ALTERED when a recorded allow rule is absent from permissions.allow")
+        void detectDrift_returnsAltered_whenAllowRuleRemoved() throws Exception {
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+
+            var settings = new Settings()
+                .withPermissions(new Permissions(List.of("Bash(mvn test)"), List.of()));
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of("Bash(mvn verify)"), List.of(),
+                null, null, null, null
+            );
+
+            var result = service.detectDrift("test", snapshot, settings, claudeDir, List.of());
+
+            assertThat(result)
+                .as("detectDrift must return ALTERED when a recorded allow rule was removed from settings")
+                .isEqualTo(ProfileDriftState.ALTERED);
+        }
+
+        @Test
+        @DisplayName("should return ALTERED when a recorded deny rule is absent from permissions.deny")
+        void detectDrift_returnsAltered_whenDenyRuleRemoved() throws Exception {
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+
+            var settings = new Settings()
+                .withPermissions(new Permissions(List.of(), List.of()));
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of("Read(.env)"),
+                null, null, null, null
+            );
+
+            var result = service.detectDrift("test", snapshot, settings, claudeDir, List.of());
+
+            assertThat(result)
+                .as("detectDrift must return ALTERED when a recorded deny rule was removed from settings")
+                .isEqualTo(ProfileDriftState.ALTERED);
+        }
+
+        @Test
+        @DisplayName("should return ALTERED when the deny rule derived from an ignore pattern is gone")
+        void detectDrift_returnsAltered_whenIgnoreDerivedDenyRuleRemoved() throws Exception {
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+
+            var settings = new Settings()
+                .withPermissions(new Permissions(List.of(), List.of("Read(**/*.pem)")));
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                null, null, null, List.of("*.key")
+            );
+
+            var result = service.detectDrift("test", snapshot, settings, claudeDir, List.of());
+
+            assertThat(result)
+                .as("detectDrift must translate each recorded ignore pattern and require its deny rule")
+                .isEqualTo(ProfileDriftState.ALTERED);
+        }
+
+        @Test
+        @DisplayName("should return ENABLED when the deny rule derived from an ignore pattern is present")
+        void detectDrift_returnsEnabled_whenIgnoreDerivedDenyRulePresent() throws Exception {
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+
+            var settings = new Settings()
+                .withPermissions(new Permissions(List.of(), List.of("Read(**/*.key)")));
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                null, null, null, List.of("*.key")
+            );
+
+            var result = service.detectDrift("test", snapshot, settings, claudeDir, List.of());
+
+            assertThat(result)
+                .as("detectDrift must accept the translated ignore deny rule as satisfied")
+                .isEqualTo(ProfileDriftState.ENABLED);
+        }
+
+        @Test
+        @DisplayName("should return ALTERED when a recorded env entry points at a different value")
+        void detectDrift_returnsAltered_whenEnvValueChanged() throws Exception {
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+
+            var settings = new Settings().withEnv(Map.of("JAVA_HOME", "/opt/jdk21"));
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                null, null, Map.of("JAVA_HOME", "/opt/jdk25"), null
+            );
+
+            var result = service.detectDrift("test", snapshot, settings, claudeDir, List.of());
+
+            assertThat(result)
+                .as("detectDrift must return ALTERED when a recorded env key was re-pointed at another value")
                 .isEqualTo(ProfileDriftState.ALTERED);
         }
     }

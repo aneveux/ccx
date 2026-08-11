@@ -111,13 +111,19 @@ public final class TuiActions {
     public TuiSnapshot enableProfile(String name, Path projectDir) {
         try {
             // Validate the leaf, then enable its whole extends closure (deps first, leaf last)
-            // so a dependent is never recorded enabled without its dependencies.
+            // so a dependent is never recorded enabled without its dependencies. Members already
+            // recorded enabled are skipped, matching `ccx profiles enable`: re-applying cannot
+            // repair an edited rule file (overwrite=false), so `r` (reinstall) is the repair path.
             profileService.load(name);
             for (var member : profileService.resolveDependencyClosure(name)) {
+                var context = ccxContextService.read(projectDir);
+                if (context.enabledProfiles().containsKey(member)) {
+                    log.debug("profile member already enabled, skipping member={} of={}", member, name);
+                    continue;
+                }
                 try {
                     var profile = profileService.load(member);
-                    var snapshot = profileApplyService.apply(profile, projectDir, false,
-                        ccxContextService.read(projectDir));
+                    var snapshot = profileApplyService.apply(profile, projectDir, false, context);
                     ccxContextService.recordEnabled(member, snapshot, projectDir);
                 } catch (ProfileNotFoundException missing) {
                     log.warn("dependency missing on disk dependency={} of={}", member, name);

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Drift detection now checks all eight recorded snapshot components. It previously
+  looked at plugins, rule files, and CLAUDE.md fragments only, so a deleted command
+  file, a removed `permissions.allow`/`deny` entry, a deny rule derived from an
+  `ignore:` pattern, or an `env` value re-pointed elsewhere all read as ENABLED.
+- Enabling a profile from the TUI now skips dependency-closure members that are
+  already enabled, matching `ccx profiles enable`. It previously re-applied and
+  re-stamped their `.ccx/context.json` records.
+- `install.sh` verifies only the `ccx` line of the checksum file, so the install no
+  longer breaks the first time a release publishes a second artifact.
+
+### Changed
+
+- The `ignore:` → `permissions.deny` translation moved to `me.neveux.ccx.util.IgnorePatterns`
+  so the apply path and drift detection share one source of truth. See the ADR-014
+  revision in `DECISIONS.md` for why the generated rules are left unanchored.
+
 ## [0.3.0] - 2026-07-16
 
 ### Changed

@@ -6,6 +6,7 @@ import me.neveux.ccx.model.CcxContext;
 import me.neveux.ccx.model.ProfileDriftState;
 import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.util.FileUtils;
+import me.neveux.ccx.util.IgnorePatterns;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -19,6 +20,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Manages the {@code .ccx/context.json} lock file in a project directory.
@@ -60,7 +62,7 @@ public class CcxContextService {
         var contextFile = projectRoot.resolve(".ccx/context.json");
         if (!Files.exists(contextFile)) {
             log.debug("context file absent path={}", contextFile);
-            return new CcxContext("1", Map.of());
+            return CcxContext.empty();
         }
         try {
             var ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
@@ -68,7 +70,7 @@ public class CcxContextService {
             return ctx;
         } catch (IOException e) {
             log.warn("failed to read context path={} — returning empty context", contextFile, e);
-            return new CcxContext("1", Map.of());
+            return CcxContext.empty();
         }
     }
 
@@ -103,7 +105,7 @@ public class CcxContextService {
         var contextFile = projectRoot.resolve(".ccx/context.json");
         CcxContext ctx;
         if (!Files.exists(contextFile)) {
-            ctx = new CcxContext("1", Map.of());
+            ctx = CcxContext.empty();
         } else {
             ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
         }
@@ -125,7 +127,7 @@ public class CcxContextService {
         var contextFile = projectRoot.resolve(".ccx/context.json");
         CcxContext ctx;
         if (!Files.exists(contextFile)) {
-            ctx = new CcxContext("1", Map.of());
+            ctx = CcxContext.empty();
         } else {
             ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
         }
@@ -136,17 +138,22 @@ public class CcxContextService {
     }
 
     /**
-     * Detects drift for a single profile by comparing the recorded snapshot against the
-     * live {@code settings.json} and the current {@code <!-- ccx:begin -->} block in
-     * {@code .claude/CLAUDE.md}.
+     * Detects drift for a single profile by comparing every component of the recorded snapshot
+     * against the live {@code settings.json}, the files under {@code .claude/}, and the current
+     * {@code <!-- ccx:begin -->} block in {@code .claude/CLAUDE.md}.
+     *
+     * <p>All eight snapshot components are checked: plugins, rule files, command files,
+     * CLAUDE.md fragments, {@code permissions.allow}, {@code permissions.deny}, the deny rules
+     * that {@code ignore:} patterns translate to, and environment entries. Any recorded
+     * component that is gone — or, for env, re-pointed at a different value — is drift.
      *
      * @param profileName  the profile to check
      * @param recorded     the snapshot recorded when the profile was last enabled; may be null
      * @param liveSettings the current {@code settings.json} content
      * @param claudeDir    the project's {@code .claude/} directory
      * @return {@link me.neveux.ccx.model.ProfileDriftState#DISABLED} if {@code recorded} is null,
-     *         {@link me.neveux.ccx.model.ProfileDriftState#ALTERED} if a plugin or rule is missing,
-     *         {@link me.neveux.ccx.model.ProfileDriftState#ENABLED} otherwise
+     *         {@link me.neveux.ccx.model.ProfileDriftState#ALTERED} if any recorded component is
+     *         missing or changed, {@link me.neveux.ccx.model.ProfileDriftState#ENABLED} otherwise
      */
     public ProfileDriftState detectDrift(String profileName, CcxContext.ProfileSnapshot recorded, Settings liveSettings, Path claudeDir) {
         // claudeDir is the .claude/ directory; CLAUDE.md is now inside .claude/
@@ -158,7 +165,8 @@ public class CcxContextService {
     /**
      * Variant of {@link #detectDrift(String, CcxContext.ProfileSnapshot, Settings, Path)}
      * that accepts pre-read marker-block lines, avoiding a redundant file read when the
-     * caller has already loaded them.
+     * caller has already loaded them. Drift semantics are identical — all eight snapshot
+     * components are checked; only the source of the fragment lines differs.
      *
      * @param profileName  the profile to check
      * @param recorded     the snapshot recorded when the profile was last enabled; may be null
@@ -190,6 +198,14 @@ public class CcxContextService {
             }
         }
 
+        // Check commands — symmetric with rules: each recorded command file must still exist
+        if (recorded.commands() != null) for (var command : recorded.commands()) {
+            if (!Files.exists(claudeDir.resolve("commands/" + command + ".md"))) {
+                log.debug("drift detected: command file absent profileName={} command={}", profileName, command);
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
         // Check fragments — each recorded fragment must have @absPath in the marker block
         if (recorded.fragments() != null && !recorded.fragments().isEmpty()) {
             for (var absPath : recorded.fragments()) {
@@ -201,7 +217,54 @@ public class CcxContextService {
             }
         }
 
+        var liveAllow = livePermissions(liveSettings, true);
+        if (recorded.permissionsAllow() != null) for (var allow : recorded.permissionsAllow()) {
+            if (!liveAllow.contains(allow)) {
+                log.debug("drift detected: allow rule absent profileName={} rule={}", profileName, allow);
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
+        var liveDeny = livePermissions(liveSettings, false);
+        if (recorded.permissionsDeny() != null) for (var deny : recorded.permissionsDeny()) {
+            if (!liveDeny.contains(deny)) {
+                log.debug("drift detected: deny rule absent profileName={} rule={}", profileName, deny);
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
+        // Check ignore patterns — the deny rule each recorded pattern translates to must still
+        // be present. Translating (rather than storing the rule) keeps one source of truth with
+        // the apply path, so a snapshot written by an older ccx still resolves to the same rule.
+        if (recorded.ignorePatterns() != null) for (var pattern : recorded.ignorePatterns()) {
+            if (pattern == null || pattern.isBlank()) continue;
+            var rule = IgnorePatterns.toReadDenyRule(pattern);
+            if (!liveDeny.contains(rule)) {
+                log.debug("drift detected: ignore deny rule absent profileName={} pattern={} rule={}",
+                    profileName, pattern, rule);
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
+        // Check env — a recorded key that was removed OR re-pointed at another value is drift
+        if (recorded.env() != null) for (var entry : recorded.env().entrySet()) {
+            var liveValue = liveSettings.env() == null ? null : liveSettings.env().get(entry.getKey());
+            if (!Objects.equals(entry.getValue(), liveValue)) {
+                log.debug("drift detected: env entry changed profileName={} key={}", profileName, entry.getKey());
+                return ProfileDriftState.ALTERED;
+            }
+        }
+
         return ProfileDriftState.ENABLED;
+    }
+
+    /** Live {@code permissions.allow} or {@code permissions.deny} entries, never null. */
+    private static List<String> livePermissions(Settings liveSettings, boolean allow) {
+        if (liveSettings == null || liveSettings.permissions() == null) {
+            return List.of();
+        }
+        var entries = allow ? liveSettings.permissions().allow() : liveSettings.permissions().deny();
+        return entries == null ? List.of() : entries;
     }
 
 }
