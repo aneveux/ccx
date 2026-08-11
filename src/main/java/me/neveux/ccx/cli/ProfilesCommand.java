@@ -191,7 +191,9 @@ public class ProfilesCommand implements Runnable {
      * Applies a profile (and its full {@code extends} dependency closure) to the
      * project directory, then records the applied snapshot in
      * {@code context.json}. Dependencies are enabled in topological order so
-     * each is recorded before the profile that depends on it.
+     * each is recorded before the profile that depends on it. A closure member
+     * already recorded enabled is skipped, so the command is idempotent and exits
+     * 0 even when there is nothing left to apply; {@code reinstall} re-applies.
      */
     @Command(name = "enable", description = "Enable a profile in this project")
     @RegisterForReflection
@@ -223,12 +225,20 @@ public class ProfilesCommand implements Runnable {
                 // Validate the leaf exists before touching anything.
                 profileService.load(name);
                 // Enable the whole extends closure (dependencies first, leaf last) so a
-                // dependent never sits enabled without its dependencies recorded.
+                // dependent never sits enabled without its dependencies recorded. Members
+                // already recorded enabled are skipped rather than re-applied: re-applying
+                // cannot repair an edited rule file anyway (overwrite=false), so `reinstall`
+                // is the honest repair path.
+                var alreadyEnabled = new ArrayList<String>();
                 for (var member : profileService.resolveDependencyClosure(name)) {
+                    var context = ccxContextService.read(dir);
+                    if (context.enabledProfiles().containsKey(member)) {
+                        alreadyEnabled.add(member);
+                        continue;
+                    }
                     try {
                         var profile = profileService.load(member);
-                        var snapshot = profileApplyService.apply(profile, dir, false,
-                            ccxContextService.read(dir));
+                        var snapshot = profileApplyService.apply(profile, dir, false, context);
                         ccxContextService.recordEnabled(member, snapshot, dir);
                     } catch (ProfileNotFoundException missing) {
                         spec.commandLine().getErr().println(
@@ -236,7 +246,18 @@ public class ProfilesCommand implements Runnable {
                     }
                 }
                 var out = spec.commandLine().getOut();
-                out.println("Enabled profile: " + name);
+                var skippedDependencies = alreadyEnabled.stream()
+                    .filter(member -> !member.equals(name))
+                    .toList();
+                if (!skippedDependencies.isEmpty()) {
+                    out.println("Already enabled: " + String.join(", ", skippedDependencies));
+                }
+                if (alreadyEnabled.contains(name)) {
+                    out.println("Profile '" + name + "' is already enabled. Run `ccx profiles reinstall "
+                        + name + "` to re-apply it.");
+                } else {
+                    out.println("Enabled profile: " + name);
+                }
                 out.flush();
                 return 0;
             } catch (ProfileNotFoundException e) {

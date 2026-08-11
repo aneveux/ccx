@@ -372,6 +372,57 @@ class ProfilesCommandTest {
                 .contains("\"java\"")
                 .contains("\"java-functional\"");
         }
+
+        @Test
+        @DisplayName("should skip an already-enabled profile and point at reinstall")
+        void enable_secondEnableSkipsAndPointsAtReinstall() {
+            var contextService = new CcxContextService();
+            runFull("profiles", "enable", "java", "--project-dir", tempDir.toString());
+            var firstEnabledAt = contextService.read(tempDir).enabledProfiles().get("java").enabledAt();
+
+            int exit = runFull("profiles", "enable", "java", "--project-dir", tempDir.toString());
+
+            assertThat(exit)
+                .as("the requested end state already holds, so a re-enable must exit 0")
+                .isZero();
+            assertThat(capturedOutput())
+                .as("the user must be told nothing was applied and which command re-applies the profile")
+                .contains("already enabled")
+                .contains("profiles reinstall java");
+            assertThat(contextService.read(tempDir).enabledProfiles().get("java").enabledAt())
+                .as("an unchanged enabledAt proves recordEnabled — and therefore apply() — never ran")
+                .isEqualTo(firstEnabledAt);
+        }
+
+        @Test
+        @DisplayName("should still enable the dependent when its dependency is already enabled")
+        void enable_skipsOnlyTheAlreadyEnabledDependency() throws Exception {
+            var dir = ccxConfigDir.resolve("profiles/java-functional");
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("profile.yaml"),
+                "metadata:\n  name: java-functional\nextends:\n  - java\n"
+                + "plugins:\n  enable:\n    - java-functional@claude-java-stack\n");
+            var contextService = new CcxContextService();
+            runFull("profiles", "enable", "java", "--project-dir", tempDir.toString());
+            var javaEnabledAt = contextService.read(tempDir).enabledProfiles().get("java").enabledAt();
+
+            int exit = runFull("profiles", "enable", "java-functional", "--project-dir", tempDir.toString());
+
+            assertThat(exit)
+                .as("the leaf still had work to do, so the command must exit 0")
+                .isZero();
+            assertThat(capturedOutput())
+                .as("the leaf was applied so the confirmation stands, and the skipped dependency is reported")
+                .contains("Enabled profile: java-functional")
+                .contains("Already enabled: java");
+            var context = contextService.read(tempDir);
+            assertThat(context.enabledProfiles())
+                .as("the leaf must be recorded even though its dependency was skipped")
+                .containsKey("java-functional");
+            assertThat(context.enabledProfiles().get("java").enabledAt())
+                .as("the guard is per-member: an already-enabled dependency must not be re-applied")
+                .isEqualTo(javaEnabledAt);
+        }
     }
 
     @Nested
