@@ -202,11 +202,11 @@ class StatusCommandTest {
     }
 
     // -----------------------------------------------------------------------
-    // Plan 043 — .claudeignore line removed from status output
+    // Plan 046 — .claudeignore line removed from status output
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("Plan 043 — no .claudeignore line in status output")
+    @DisplayName("Plan 046 — no .claudeignore line in status output")
     class NoDotClaudeIgnoreLine {
 
         @Test

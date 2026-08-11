@@ -288,11 +288,11 @@ class OverviewTabTest {
     }
 
     // -----------------------------------------------------------------------
-    // Plan 043 — Config row 2 drops .claudeignore sub-block
+    // Plan 046 — Config row 2 drops .claudeignore sub-block
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("Plan 043 — Config row 2 has no .claudeignore sub-block")
+    @DisplayName("Plan 046 — Config row 2 has no .claudeignore sub-block")
     class ConfigRow2NoDotClaudeIgnore {
 
         @Test

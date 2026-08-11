@@ -336,11 +336,11 @@ class DoctorCommandTest {
     }
 
     // -----------------------------------------------------------------------
-    // Plan 043 — .claudeignore check removed from doctor output
+    // Plan 046 — .claudeignore check removed from doctor output
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("Plan 043 — no .claudeignore check in doctor output")
+    @DisplayName("Plan 046 — no .claudeignore check in doctor output")
     class NoDotClaudeIgnoreCheck {
 
         @Test
