@@ -710,7 +710,7 @@ class ProfileApplyServiceTest {
         }
 
         // -----------------------------------------------------------------------
-        // Plan 043 — remove() undoes deny-rule translations for snapshot ignorePatterns
+        // Plan 046 — remove() undoes deny-rule translations for snapshot ignorePatterns
         // -----------------------------------------------------------------------
 
         @Test
@@ -766,11 +766,11 @@ class ProfileApplyServiceTest {
     }
 
     // -----------------------------------------------------------------------
-    // Plan 043 — ignore patterns as deny rules (replaces .claudeignore writes)
+    // Plan 046 — ignore patterns as deny rules (replaces .claudeignore writes)
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("Plan 043 — ignore patterns as permissions.deny rules")
+    @DisplayName("Plan 046 — ignore patterns as permissions.deny rules")
     class IgnoreAsDenyRules {
 
         @Test
@@ -902,6 +902,46 @@ class ProfileApplyServiceTest {
             assertThat(snapshot.ignorePatterns())
                 .as("*.class maps to Read(**/*.class) which was absent — must be recorded in snapshot")
                 .contains("*.class");
+        }
+
+        @Test
+        @DisplayName("glob pattern containing a path separator is wrapped verbatim, not re-rooted")
+        void apply_translatesGlobWithSeparator_verbatim() {
+            var profile = new Profile().withIgnore(List.of("docs/*.md"));
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying ignore patterns as deny rules")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("docs/*.md already has a separator — must NOT become Read(**/docs/*.md)")
+                .contains("Read(docs/*.md)")
+                .doesNotContain("Read(**/docs/*.md)");
+        }
+
+        @Test
+        @DisplayName("blank and null ignore entries are skipped, never translated")
+        void apply_skipsBlankAndNullIgnorePatterns() {
+            var ignore = new java.util.ArrayList<String>();
+            ignore.add("target/");
+            ignore.add("");
+            ignore.add("   ");
+            ignore.add(null);
+
+            var snapshot = service.apply(new Profile().withIgnore(ignore), tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying the one real pattern")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("only the one real pattern may produce a deny rule")
+                .containsExactly("Read(target/**)");
+            assertThat(snapshot.ignorePatterns())
+                .as("blank and null entries must not be recorded for removal tracking")
+                .containsExactly("target/");
         }
     }
 }
