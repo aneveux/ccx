@@ -287,4 +287,37 @@ class OverviewTabTest {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Plan 043 — Config row 2 drops .claudeignore sub-block
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Plan 043 — Config row 2 has no .claudeignore sub-block")
+    class ConfigRow2NoDotClaudeIgnore {
+
+        @Test
+        @DisplayName("rendered overview must not contain a .claudeignore section title")
+        void configRow2_doesNotRenderClaudeIgnoreSubBlock() {
+            var out = render(populated(), 100, 60);
+
+            assertThat(out)
+                .as("after migration to deny rules the .claudeignore sub-block must be gone "
+                    + "— its title must not appear anywhere in the rendered output")
+                .doesNotContain(".claudeignore");
+        }
+
+        @Test
+        @DisplayName("Config row 2 renders MCP Servers and Hooks sub-blocks")
+        void configRow2_rendersMcpAndHooksSubBlocks() {
+            var out = render(populated(), 100, 60);
+
+            assertThat(out)
+                .as("MCP Servers sub-block must still render in Config row 2")
+                .contains("MCP");
+            assertThat(out)
+                .as("Hooks sub-block must still render in Config row 2")
+                .contains("Hooks");
+        }
+    }
 }

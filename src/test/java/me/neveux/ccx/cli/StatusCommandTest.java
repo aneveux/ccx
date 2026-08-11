@@ -200,4 +200,24 @@ class StatusCommandTest {
             .withMcpServers(Map.of("my-server", mcp));
         return settings;
     }
+
+    // -----------------------------------------------------------------------
+    // Plan 043 — .claudeignore line removed from status output
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Plan 043 — no .claudeignore line in status output")
+    class NoDotClaudeIgnoreLine {
+
+        @Test
+        @DisplayName("status output must not mention .claudeignore after migration to deny rules")
+        void status_doesNotMentionClaudeIgnore() {
+            var result = run("status", "--project-dir", tempDir.toString());
+
+            assertThat(result.output())
+                .as("status must not mention .claudeignore — "
+                    + "ignore patterns now live in permissions.deny, not a separate file")
+                .doesNotContain(".claudeignore");
+        }
+    }
 }

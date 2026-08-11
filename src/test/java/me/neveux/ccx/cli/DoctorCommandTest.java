@@ -369,6 +369,26 @@ class DoctorCommandTest {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Plan 043 — .claudeignore check removed from doctor output
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Plan 043 — no .claudeignore check in doctor output")
+    class NoDotClaudeIgnoreCheck {
+
+        @Test
+        @DisplayName("doctor output must not mention .claudeignore after migration to deny rules")
+        void doctor_doesNotMentionClaudeIgnore() {
+            var result = run("doctor", "--project-dir", tempDir.toString());
+
+            assertThat(result.output())
+                .as("doctor must not check for .claudeignore — "
+                    + "ignore patterns now live in permissions.deny, not a separate file")
+                .doesNotContain(".claudeignore");
+        }
+    }
+
     @Nested
     @DisplayName("when a profile has a missing dependency")
     class WhenBrokenDependency {

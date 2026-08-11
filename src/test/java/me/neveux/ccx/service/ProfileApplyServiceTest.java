@@ -8,6 +8,7 @@ import me.neveux.ccx.model.CcxContext;
 import me.neveux.ccx.model.Permissions;
 import me.neveux.ccx.model.Profile;
 import me.neveux.ccx.model.ProfilePlugins;
+import me.neveux.ccx.model.Settings;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -743,6 +744,39 @@ class ProfileApplyServiceTest {
             }
         }
 
+        // -----------------------------------------------------------------------
+        // Plan 043 — remove() undoes deny-rule translations for snapshot ignorePatterns
+        // -----------------------------------------------------------------------
+
+        @Test
+        @DisplayName("remove() must delete ignore-pattern deny rules from settings, leaving other deny rules")
+        void remove_removesIgnorePatternDenyRulesFromSettings() {
+            // Pre-populate settings with two deny rules: one that belongs to a profile
+            // ignore pattern and one that was added manually.
+            var permissions = new Permissions(null, List.of("Read(target/**)", "Read(secret.txt)"));
+            settingsService.write(new Settings().withPermissions(permissions), tempDir);
+
+            // Snapshot records only the ignore pattern "target/" — not "Read(secret.txt)".
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), null,
+                List.of("target/")
+            );
+
+            service.remove(snapshot, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after remove — deny rules still present")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("Read(secret.txt) was not in the snapshot — must survive remove")
+                .contains("Read(secret.txt)");
+            assertThat(settings.permissions().deny())
+                .as("Read(target/**) corresponds to snapshot ignore pattern target/ — must be removed")
+                .doesNotContain("Read(target/**)");
+        }
+
         @Test
         @DisplayName("should remove fragment @path entries from .claude/CLAUDE.md marker block")
         void remove_removesFragmentEntriesFromClaudeMd() throws Exception {
@@ -763,6 +797,146 @@ class ProfileApplyServiceTest {
             var content = Files.readString(claudeMd);
             assertThat(content).as("fragment entry must be removed").doesNotContain(fragmentAbsPath);
             assertThat(content).as("other entry must survive").contains("other.md");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Plan 043 — ignore patterns as deny rules (replaces .claudeignore writes)
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Plan 043 — ignore patterns as permissions.deny rules")
+    class IgnoreAsDenyRules {
+
+        @Test
+        @DisplayName("apply() with ignore patterns must write translated deny rules to settings.json")
+        void apply_writesDenyRulesForIgnorePatterns() {
+            var profile = new Profile()
+                .withIgnore(List.of("target/", "*.class"));
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("settings.permissions must not be null after applying a profile with ignore patterns")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("target/ must translate to Read(target/**) in permissions.deny")
+                .contains("Read(target/**)")
+                .as("*.class must translate to Read(**/*.class) in permissions.deny")
+                .contains("Read(**/*.class)");
+        }
+
+        @Test
+        @DisplayName("apply() with ignore patterns must not create .claudeignore")
+        void apply_doesNotCreateClaudeIgnoreForIgnorePatterns() {
+            var profile = new Profile()
+                .withIgnore(List.of("target/", "*.class"));
+
+            service.apply(profile, tempDir);
+
+            assertThat(tempDir.resolve(".claudeignore"))
+                .as("apply must not create .claudeignore — ignore patterns migrate to permissions.deny")
+                .doesNotExist();
+        }
+
+        @Test
+        @DisplayName("ignore patterns applied via apply() must appear in the snapshot ignorePatterns")
+        void apply_recordsIgnorePatternsInSnapshot() {
+            var profile = new Profile()
+                .withIgnore(List.of("target/", "*.class"));
+
+            var snapshot = service.apply(profile, tempDir);
+
+            assertThat(snapshot.ignorePatterns())
+                .as("snapshot must record the source ignore patterns that were translated to deny rules")
+                .containsExactlyInAnyOrder("target/", "*.class");
+        }
+
+        @Test
+        @DisplayName("pattern with trailing slash translates to Read(<pattern>**) deny rule")
+        void apply_translatesTrailingSlashPatternToReadDenyRule() {
+            var profile = new Profile().withIgnore(List.of("build/"));
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying ignore patterns as deny rules")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("build/ must translate to Read(build/**)")
+                .contains("Read(build/**)");
+        }
+
+        @Test
+        @DisplayName("glob pattern without path separator translates to Read(**/<pattern>) deny rule")
+        void apply_translatesGlobPatternToRecursiveReadDenyRule() {
+            var profile = new Profile().withIgnore(List.of("*.log"));
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying ignore patterns as deny rules")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("*.log (no slash) must translate to Read(**/*.log)")
+                .contains("Read(**/*.log)");
+        }
+
+        @Test
+        @DisplayName("plain filename (no slash, no wildcard) translates to Read(<pattern>) deny rule")
+        void apply_translatesPlainFilenameToReadDenyRule() {
+            var profile = new Profile().withIgnore(List.of("secrets.txt"));
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying ignore patterns as deny rules")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("secrets.txt (plain) must translate to Read(secrets.txt)")
+                .contains("Read(secrets.txt)");
+        }
+
+        @Test
+        @DisplayName("pre-formatted Read/Write/Bash patterns pass through unchanged as deny rules")
+        void apply_passesThrough_preFormattedDenyPatterns() {
+            var profile = new Profile()
+                .withIgnore(List.of("Read(custom/**)", "Write(other)", "Bash(secret *)"));
+
+            service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying ignore patterns as deny rules")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("pre-formatted Read/Write/Bash patterns must pass through without re-wrapping")
+                .contains("Read(custom/**)")
+                .contains("Write(other)")
+                .contains("Bash(secret *)");
+        }
+
+        @Test
+        @DisplayName("pattern whose deny rule was already present before apply is not in the snapshot")
+        void apply_snapshotExcludesPatternAlreadyPresentAsDenyRule() {
+            // Pre-populate settings.permissions.deny with the rule that target/ would translate to.
+            var existingPermissions = new Permissions(null, List.of("Read(target/**)"));
+            settingsService.write(new Settings().withPermissions(existingPermissions), tempDir);
+
+            var profile = new Profile().withIgnore(List.of("target/", "*.class"));
+
+            var snapshot = service.apply(profile, tempDir);
+
+            assertThat(snapshot.ignorePatterns())
+                .as("target/ maps to Read(target/**) which was pre-existing — must NOT be in snapshot")
+                .doesNotContain("target/");
+            assertThat(snapshot.ignorePatterns())
+                .as("*.class maps to Read(**/*.class) which was absent — must be recorded in snapshot")
+                .contains("*.class");
         }
     }
 }
