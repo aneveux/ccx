@@ -20,7 +20,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -526,6 +528,26 @@ class ProfileApplyServiceTest {
         }
 
         @Test
+        @DisplayName("should still match a legacy snapshot pattern carrying stray whitespace")
+        void remove_stripsWhitespaceFromLegacySnapshotPatterns() {
+            var permissions = new Permissions(null, List.of("Read(target/**)"));
+            settingsService.write(new Settings().withPermissions(permissions), tempDir);
+
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), null,
+                List.of("  target/  ")
+            );
+
+            service.remove(snapshot, tempDir);
+
+            assertThat(settingsService.read(tempDir).permissions())
+                .as("a pattern recorded before stripping existed must still translate to "
+                    + "Read(target/**) — removing the last deny rule clears the permissions block")
+                .isNull();
+        }
+
+        @Test
         @DisplayName("should remove command files tracked in snapshot")
         void remove_removesSnapshotCommandFiles() throws Exception {
             var commandsDir = tempDir.resolve(".claude/commands");
@@ -941,6 +963,88 @@ class ProfileApplyServiceTest {
                 .containsExactly("Read(target/**)");
             assertThat(snapshot.ignorePatterns())
                 .as("blank and null entries must not be recorded for removal tracking")
+                .containsExactly("target/");
+        }
+
+        @Test
+        @DisplayName("surrounding whitespace is stripped before translation")
+        void apply_stripsWhitespaceAroundIgnorePatterns() {
+            var profile = new Profile().withIgnore(List.of("  target/  ", " *.class "));
+
+            var snapshot = service.apply(profile, tempDir);
+
+            var settings = settingsService.read(tempDir);
+            assertThat(settings.permissions())
+                .as("permissions must not be null after applying ignore patterns as deny rules")
+                .isNotNull();
+            assertThat(settings.permissions().deny())
+                .as("a padded pattern must not yield an inert rule like Read(  target/  **)")
+                .containsExactly("Read(target/**)", "Read(**/*.class)");
+            assertThat(snapshot.ignorePatterns())
+                .as("the stripped pattern must be recorded so remove() translates it identically")
+                .containsExactly("target/", "*.class");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deny-rule provenance: telling a rule ccx wrote apart from one the user wrote
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("ignore deny-rule provenance across enables")
+    class IgnoreDenyRuleProvenance {
+
+        private CcxContext contextWith(String profileName, CcxContext.ProfileSnapshot snapshot) {
+            return new CcxContext("1", Map.of(
+                profileName, new CcxContext.ProfileRecord(Instant.now(), snapshot)));
+        }
+
+        @Test
+        @DisplayName("re-enabling the same profile keeps its deny rules attributed to it")
+        void apply_reRecordsOwnDenyRulesOnSecondEnable() {
+            var profile = new Profile().withIgnore(List.of("target/"));
+            var first = service.apply(profile, tempDir);
+            assertThat(first.ignorePatterns())
+                .as("first enable writes the rule, so it must be recorded")
+                .containsExactly("target/");
+
+            var second = service.apply(profile, tempDir, false, contextWith("java", first));
+
+            assertThat(second.ignorePatterns())
+                .as("Read(target/**) is present only because this profile put it there — "
+                    + "re-enabling must keep it attributed, or disable can never remove it")
+                .containsExactly("target/");
+        }
+
+        @Test
+        @DisplayName("a second profile records a deny rule a sibling profile already contributed")
+        void apply_recordsDenyRuleContributedBySiblingProfile() {
+            var profileA = new Profile().withIgnore(List.of("target/"));
+            var snapshotA = service.apply(profileA, tempDir);
+
+            var profileB = new Profile().withIgnore(List.of("target/", "*.class"));
+            var snapshotB = service.apply(profileB, tempDir, false, contextWith("A", snapshotA));
+
+            assertThat(snapshotB.ignorePatterns())
+                .as("both profiles declare target/, so both must claim it — otherwise disabling A "
+                    + "strips a rule B still needs")
+                .containsExactly("target/", "*.class");
+        }
+
+        @Test
+        @DisplayName("a hand-written deny rule no profile recorded is never claimed")
+        void apply_doesNotRecordUserOwnedDenyRule() {
+            settingsService.write(
+                new Settings().withPermissions(new Permissions(null, List.of("Read(secret/**)"))),
+                tempDir);
+
+            var profile = new Profile().withIgnore(List.of("secret/", "target/"));
+
+            var snapshot = service.apply(profile, tempDir, false, new CcxContext("1", Map.of()));
+
+            assertThat(snapshot.ignorePatterns())
+                .as("no recorded profile contributed Read(secret/**), so it is the user's rule "
+                    + "and must survive a later disable")
                 .containsExactly("target/");
         }
     }

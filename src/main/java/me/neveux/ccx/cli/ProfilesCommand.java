@@ -227,7 +227,8 @@ public class ProfilesCommand implements Runnable {
                 for (var member : profileService.resolveDependencyClosure(name)) {
                     try {
                         var profile = profileService.load(member);
-                        var snapshot = profileApplyService.apply(profile, dir, false);
+                        var snapshot = profileApplyService.apply(profile, dir, false,
+                            ccxContextService.read(dir));
                         ccxContextService.recordEnabled(member, snapshot, dir);
                     } catch (ProfileNotFoundException missing) {
                         spec.commandLine().getErr().println(
@@ -340,7 +341,8 @@ public class ProfilesCommand implements Runnable {
             }
             try {
                 var resolved = profileService.loadAndResolve(name);
-                var snapshot = profileApplyService.apply(resolved, dir);
+                var snapshot = profileApplyService.apply(resolved, dir, true,
+                    ccxContextService.read(dir));
                 ccxContextService.recordEnabled(name, snapshot, dir);
                 var out = spec.commandLine().getOut();
                 out.println("Reinstalled profile: " + name);

@@ -19,6 +19,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -92,6 +94,25 @@ public class ProfileApplyService {
      * @return a snapshot of all resources written, for recording in the context file
      */
     public CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot, boolean overwrite) {
+        return apply(resolved, projectRoot, overwrite, new CcxContext("1", Map.of()));
+    }
+
+    /**
+     * Applies the resolved profile to the project, using {@code context} to tell a
+     * {@code permissions.deny} rule some profile already contributed apart from one the user
+     * wrote by hand. Prefer this overload whenever the context file is available: without it,
+     * a rule this same profile wrote on a previous enable looks user-owned, so it drops out of
+     * the snapshot and no later {@code disable} can remove it.
+     *
+     * @param resolved    the fully merged profile to apply
+     * @param projectRoot root of the project to configure
+     * @param overwrite   when {@code true}, existing rule and command files are replaced;
+     *                    when {@code false}, they are kept and still included in the snapshot
+     * @param context     the recorded context, used for deny-rule provenance
+     * @return a snapshot of all resources written, for recording in the context file
+     */
+    public CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot, boolean overwrite,
+                                            CcxContext context) {
         var profileName = resolved.metadata() != null ? resolved.metadata().name() : null;
         var s = settingsService.read(projectRoot);
 
@@ -102,7 +123,7 @@ public class ProfileApplyService {
         s = applyEnv(s, resolved, writtenEnv);
 
         var writtenIgnorePatterns = new ArrayList<String>();
-        s = applyIgnoreAsDenyRules(s, resolved, writtenIgnorePatterns);
+        s = applyIgnoreAsDenyRules(s, resolved, writtenIgnorePatterns, ccxOwnedDenyRules(context));
         settingsService.write(s, projectRoot);
 
         var writtenRules = applyRules(resolved, projectRoot, overwrite, profileName);
@@ -283,13 +304,15 @@ public class ProfileApplyService {
      * Translates the profile's {@code ignore:} patterns into {@code Read(...)} deny rules and
      * merges them into the {@code permissions.deny} list of {@code settings}.
      *
-     * @param writtenIgnorePatterns collects the original patterns whose translated deny rule was
-     *                              absent before the merge, so {@link #remove} only ever undoes
-     *                              rules this profile actually contributed
+     * @param writtenIgnorePatterns collects the stripped patterns this profile claims, so
+     *                              {@link #remove} never undoes a deny rule the user wrote by hand
+     * @param ccxOwnedDenyRules     deny rules some recorded profile already contributed; a rule in
+     *                              this set is claimed even though it is already present
      * @return {@code settings} with the merged deny rules, or unchanged when there is nothing to add
      */
     private Settings applyIgnoreAsDenyRules(Settings settings, Profile resolved,
-                                            List<String> writtenIgnorePatterns) {
+                                            List<String> writtenIgnorePatterns,
+                                            Set<String> ccxOwnedDenyRules) {
         if (resolved.ignore() == null || resolved.ignore().isEmpty()) {
             return settings;
         }
@@ -298,16 +321,17 @@ public class ProfileApplyService {
             : List.<String>of();
 
         var denyRules = new ArrayList<String>();
-        for (var pattern : resolved.ignore()) {
-            if (pattern == null || pattern.isBlank()) {
+        for (var rawPattern : resolved.ignore()) {
+            if (rawPattern == null || rawPattern.isBlank()) {
                 continue;
             }
+            var pattern = rawPattern.strip();
             var rule = toReadDenyRule(pattern);
             if (denyRules.contains(rule)) {
                 continue;
             }
             denyRules.add(rule);
-            if (!existingDeny.contains(rule)) {
+            if (!existingDeny.contains(rule) || ccxOwnedDenyRules.contains(rule)) {
                 writtenIgnorePatterns.add(pattern);
             }
         }
@@ -320,15 +344,37 @@ public class ProfileApplyService {
     }
 
     /**
+     * Collects the deny rules that some profile recorded in {@code context} already contributed.
+     * A rule outside this set that is nevertheless present in {@code permissions.deny} belongs to
+     * the user, and must never be claimed by a profile — claiming it would delete it on disable.
+     */
+    private static Set<String> ccxOwnedDenyRules(CcxContext context) {
+        if (context == null || context.enabledProfiles() == null) {
+            return Set.of();
+        }
+        return context.enabledProfiles().values().stream()
+            .map(CcxContext.ProfileRecord::snapshot)
+            .filter(Objects::nonNull)
+            .map(CcxContext.ProfileSnapshot::ignorePatterns)
+            .filter(Objects::nonNull)
+            .flatMap(List::stream)
+            .filter(pattern -> pattern != null && !pattern.isBlank())
+            .map(ProfileApplyService::toReadDenyRule)
+            .collect(Collectors.toSet());
+    }
+
+    /**
      * Maps one profile {@code ignore:} entry to the equivalent {@code settings.json} deny rule.
      *
      * <p>Entries already written as a tool pattern ({@code Read(...)}, {@code Write(...)},
      * {@code Bash(...)}) pass through verbatim. Otherwise a directory pattern ({@code target/})
      * becomes {@code Read(target/**)}, a bare glob ({@code *.class}) becomes
      * {@code Read(**}{@code /*.class)} so it matches at any depth, and anything else is wrapped
-     * as-is ({@code .env} becomes {@code Read(.env)}).
+     * as-is ({@code .env} becomes {@code Read(.env)}). Surrounding whitespace is stripped first:
+     * {@code "target/ "} would otherwise yield {@code Read(target/ **)}, a rule matching nothing.
      */
-    private static String toReadDenyRule(String pattern) {
+    private static String toReadDenyRule(String rawPattern) {
+        var pattern = rawPattern.strip();
         if (pattern.startsWith("Read(") || pattern.startsWith("Write(") || pattern.startsWith("Bash(")) {
             return pattern;
         }

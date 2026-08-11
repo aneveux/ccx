@@ -116,7 +116,8 @@ public final class TuiActions {
             for (var member : profileService.resolveDependencyClosure(name)) {
                 try {
                     var profile = profileService.load(member);
-                    var snapshot = profileApplyService.apply(profile, projectDir, false);
+                    var snapshot = profileApplyService.apply(profile, projectDir, false,
+                        ccxContextService.read(projectDir));
                     ccxContextService.recordEnabled(member, snapshot, projectDir);
                 } catch (ProfileNotFoundException missing) {
                     log.warn("dependency missing on disk dependency={} of={}", member, name);
@@ -161,7 +162,8 @@ public final class TuiActions {
                 ccxContextService.recordDisabled(name, projectDir);
             }
             var resolved = profileService.loadAndResolve(name);
-            var snapshot = profileApplyService.apply(resolved, projectDir, true);
+            var snapshot = profileApplyService.apply(resolved, projectDir, true,
+                ccxContextService.read(projectDir));
             ccxContextService.recordEnabled(name, snapshot, projectDir);
             log.debug("profile reinstalled name={} projectDir={}", name, projectDir);
         } catch (ProfileNotFoundException e) {
