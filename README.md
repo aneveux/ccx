@@ -223,23 +223,32 @@ ignore:
   - "*.class"
 ```
 
-On `ccx profiles enable`, `permissions` and `env` merge into
-`.claude/settings.json`, while `ignore` patterns append to a separate
-`.claudeignore` file at the project root:
+On `ccx profiles enable`, all three merge into `.claude/settings.json`. `ignore`
+patterns are translated into `Read(...)` deny rules and joined with the profile's
+own `permissions.deny` entries — Claude Code has no separate ignore-file mechanism:
 
 ```json
 // .claude/settings.json
 {
-  "permissions": { "deny": ["Bash(rm -rf *)"] },
+  "permissions": {
+    "deny": ["Bash(rm -rf *)", "Read(target/**)", "Read(**/*.class)"]
+  },
   "env": { "JAVA_HOME": "/usr/lib/jvm/java-21" }
 }
 ```
 
-```gitignore
-# .claudeignore
-target/
-*.class
-```
+The translation is purely syntactic:
+
+| `ignore:` entry   | Deny rule written    |
+|-------------------|----------------------|
+| `target/`         | `Read(target/**)`    |
+| `*.class`         | `Read(**/*.class)`   |
+| `.env`            | `Read(.env)`         |
+| `docs/*.md`       | `Read(docs/*.md)`    |
+| `Read(custom/**)` | `Read(custom/**)`    |
+
+An entry already written as `Read(...)`, `Write(...)`, or `Bash(...)` passes through
+verbatim, so you can bypass the auto-wrapping when you want exact control.
 
 ### `.ccx/context.json`
 

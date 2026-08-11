@@ -117,4 +117,9 @@ Key schema fields:
 - `claudeMd.fragments` — fragment names resolving to `claudemd/<name>.md` in the profile dir
 - rule files — auto-discovered: every `*.md` in the profile's `rules/` dir is applied (no key)
 - `permissions.allow/deny` — merged into `.claude/settings.json` permissions arrays
-- `env` — environment variables; `ignore` — `.claudeignore` patterns
+- `env` — environment variables merged into `.claude/settings.json`
+- `ignore` — file path patterns added as `Read(...)` deny rules to
+  `.claude/settings.json`. Simple patterns are auto-wrapped (`target/` →
+  `Read(target/**)`, `*.class` → `Read(**/*.class)`); entries already written as
+  `Read(...)`/`Write(...)`/`Bash(...)` pass through verbatim. There is no
+  `.claudeignore` file — see ADR-014 in `DECISIONS.md`.

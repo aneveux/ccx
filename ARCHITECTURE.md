@@ -67,7 +67,7 @@ cli/
   ConfigCommand      → CcxConfigService
   TuiCommand         → TuiDataService, ProfileApplyService, CcxContextService, ProfileService,
                         SettingsService, ClaudeMdService, MarketplaceCloneService, PluginMapService
-  (`init` and `compose` top-level commands were removed in plan 036 Wave 2; `resolveDependencyClosure` and `.claudeignore` bootstrap migrated to ProfileService / ProfileApplyService.)
+  (`init` and `compose` top-level commands were removed in plan 036 Wave 2; `resolveDependencyClosure` migrated to ProfileService. Profile `ignore:` patterns are applied by ProfileApplyService as `permissions.deny` rules — see ADR-014.)
 
 service/
   ProfileApplyService   → SettingsService, ClaudeMdService, PluginMapService, CcxConfigService

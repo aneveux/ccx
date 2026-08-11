@@ -76,6 +76,8 @@ where Tamboui adds friction without value.
 
 **Revision (2026-06-30):** `InitCommand` (and `ComposeCommand`/`ComposeService`) were removed in plan 036 Wave 2. `ProfileApplyService` is now the sole owner of the apply/remove lifecycle; the dry-run preview path described above no longer exists. `resolveDependencyClosure` moved to `ProfileService` and `.claudeignore` bootstrap to `ProfileApplyService`.
 
+**Revision (2026-08-11):** the `.claudeignore` bootstrap named above no longer exists — `.claudeignore` was never a real Claude Code feature. `ProfileApplyService` now translates profile `ignore:` patterns into `permissions.deny` rules inside `settings.json`. See ADR-014.
+
 ---
 
 ## ADR-006: `TuiSnapshot` as full immutable data graph
@@ -188,3 +190,24 @@ A Jackson `@JsonAnySetter` method on the record itself is not possible: records 
 - Both `Settings` and `Settings.Builder` must be annotated `@RegisterForReflection` — GraalVM does not automatically register inner classes even when the outer class is registered.
 - Any new known top-level field added to `Settings` must also get a corresponding setter in `Builder`.
 - The `unknownFields` component uses `@JsonInclude(NON_EMPTY)` so it is omitted from serialized output when empty (no `"unknownFields":{}` noise in the JSON).
+
+---
+
+## ADR-014: `ignore:` patterns become `permissions.deny` rules, not a `.claudeignore` file
+
+**Date:** 2026-08-11
+**Status:** accepted
+
+**Context:** ccx wrote profile `ignore:` patterns to a `.claudeignore` file at the project root, and bootstrapped that file with a default pattern set on first profile enable. `.claudeignore` is not a real Claude Code feature — it was hallucinated by an LLM and propagated into ccx across plans 024 and 036. Claude Code has never read the file, so every pattern ccx wrote there was silently ignored. Users who added `ignore: ["*.env"]` to a profile got no protection at all while the tool reported success.
+
+The mechanism Claude Code actually honours is `permissions.deny` in `.claude/settings.json`, whose entries are tool-use patterns like `Read(target/**)`.
+
+**Decision:** `Profile.ignore` is applied as `Read(...)` deny rules merged into `settings.json`. `ProfileApplyService.toReadDenyRule` performs a purely syntactic translation: a trailing-slash pattern becomes `Read(<pattern>**)`, a bare glob with no path separator becomes `Read(**/<pattern>)` so it matches at any depth, anything else is wrapped as `Read(<pattern>)`, and an entry already written as `Read(...)`/`Write(...)`/`Bash(...)` passes through verbatim. Blank and null entries are skipped.
+
+`ccx clean --force` still deletes a `.claudeignore` if present — the file is no longer managed, but older ccx versions created one and leaving it behind would be confusing litter.
+
+**Consequences:**
+- The snapshot records only those original patterns whose translated rule was *absent* from `permissions.deny` before the merge. Without this, disabling a profile would delete a deny rule the user wrote by hand.
+- `ignore:` no longer has a dedicated on-disk artefact, so the `.claudeignore` reporting in `ccx doctor`, `ccx status`, and the TUI overview was removed along with `TuiSnapshot.ClaudeIgnoreInfo`.
+- **Tension with VISION principle 4 ("explicit over magic: no silent defaults"):** auto-wrapping `target/` into `Read(target/**)` is a translation the user does not see in their profile YAML. Accepted, mitigated two ways — the mapping table is documented in `README.md` and `CONTRIBUTING.md`, and raw `Read(...)`/`Write(...)`/`Bash(...)` entries pass through untouched so a user who wants exact control has it.
+- Existing projects carrying a stale `.claudeignore` are not migrated automatically. Re-enabling a profile writes the correct deny rules; the dead file is removed by `ccx clean`.
