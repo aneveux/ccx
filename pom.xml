@@ -38,7 +38,7 @@
         <!-- CI-friendly version — the git-changelist-maven-extension rewrites ${changelist}
              to -rc<commitcount>.<sha> when built with -Dset.changelist (see .mvn/). A plain
              local build resolves to ${revision}${changelist} = <revision>-SNAPSHOT. -->
-        <revision>0.3.0</revision>
+        <revision>0.3.1</revision>
         <changelist>-SNAPSHOT</changelist>
         <java.version>25</java.version>
         <maven.compiler.source>25</maven.compiler.source>
