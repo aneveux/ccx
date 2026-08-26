@@ -35,6 +35,13 @@ class DoctorCommandTest {
     @TempDir
     Path tempDir;
 
+    /**
+     * Stand-in for the user home so plugin verification never reads the developer's real
+     * {@code ~/.claude/settings.json} — its marketplaces would otherwise decide the verdicts.
+     */
+    @TempDir
+    Path isolatedGlobalDir;
+
     private SettingsService settingsService;
     private CommandLine commandLine;
 
@@ -62,7 +69,8 @@ class DoctorCommandTest {
         var settings = new Settings().withEnabledPlugins(Map.of("java@claude-java-stack", true));
         settingsService.write(settings, tempDir);
 
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode())
             .as("doctor on valid project must exit 0")
@@ -78,7 +86,8 @@ class DoctorCommandTest {
         var settings = new Settings().withEnabledPlugins(Map.of("java@claude-java-stack", true));
         settingsService.write(settings, tempDir);
 
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode())
             .as("a healthy project must exit 0")
@@ -101,7 +110,8 @@ class DoctorCommandTest {
         Files.writeString(claudeMd,
             "# Project\n<!-- ccx:begin -->\n@/nonexistent/path/to/stack.md\n<!-- ccx:end -->\n");
 
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode())
             .as("doctor with missing stack ref must exit non-zero")
@@ -118,7 +128,8 @@ class DoctorCommandTest {
         Files.createDirectories(claudeDir);
         Files.writeString(claudeDir.resolve("settings.json"), "{ this is not valid json }}}");
 
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode())
             .as("doctor with malformed settings.json must exit non-zero")
@@ -139,7 +150,8 @@ class DoctorCommandTest {
         var settings = new Settings().withEnabledPlugins(Map.of("java@claude-java-stack", true, "quarkus@claude-java-stack", true));
         settingsService.write(settings, tempDir);
 
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode()).isZero();
         assertThat(result.output())
@@ -159,7 +171,8 @@ class DoctorCommandTest {
         settings = settings.withMcpServers(Map.of("my-server", server));
         settingsService.write(settings, tempDir);
 
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode()).isZero();
         assertThat(result.output()).contains("[INFO]");
@@ -169,7 +182,8 @@ class DoctorCommandTest {
     @Test
     @DisplayName("should show [INFO] for no plugins when enabledPlugins is null")
     void doctorWithNoSettings_showsZeroPlugins() throws Exception {
-        var result = run("doctor", "--project-dir", tempDir.toString());
+        var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
         assertThat(result.exitCode()).isZero();
         assertThat(result.output()).contains("[INFO]");
@@ -210,7 +224,8 @@ class DoctorCommandTest {
             var settings = new Settings().withEnabledPlugins(Map.of("java@claude-java-stack", true));
             settingsService.write(settings, tempDir);
 
-            var result = run("doctor", "--project-dir", tempDir.toString());
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
             assertThat(result.exitCode()).isZero();
             assertThat(result.output())
@@ -234,7 +249,8 @@ class DoctorCommandTest {
                 .withExtraKnownMarketplaces(List.of(source));
             settingsService.write(settings, tempDir);
 
-            var result = run("doctor", "--project-dir", tempDir.toString());
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
             assertThat(result.exitCode()).isZero();
             assertThat(result.output())
@@ -255,11 +271,59 @@ class DoctorCommandTest {
                 .withExtraKnownMarketplaces(List.of(source));
             settingsService.write(settings, tempDir);
 
-            var result = run("doctor", "--project-dir", tempDir.toString());
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
             assertThat(result.exitCode()).isZero();
             assertThat(result.output())
                 .as("output must warn when plugin is absent from marketplace")
+                .contains("[WARNING] plugin enabled: unknown-plugin@my-marketplace (not found in marketplace)");
+        }
+
+        @Test
+        @DisplayName("should show verified line when the marketplace is declared only in global settings")
+        void doctorWithGlobalOnlyMarketplace_showsVerifiedPlugin(@TempDir Path marketplaceDir) throws Exception {
+            Files.createDirectories(marketplaceDir.resolve("java"));
+
+            var source = new MarketplaceSource("claude-java-stack", marketplaceDir.toString(), null, null);
+
+            var globalSettings = new Settings().withExtraKnownMarketplaces(List.of(source));
+            settingsService.write(globalSettings, isolatedGlobalDir);
+
+            var settings = new Settings().withEnabledPlugins(Map.of("java@claude-java-stack", true));
+            settingsService.write(settings, tempDir);
+
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
+
+            assertThat(result.exitCode()).isZero();
+            assertThat(result.output())
+                .as("a marketplace declared at user scope must still verify the plugin")
+                .contains("[OK] plugin enabled: java@claude-java-stack (verified)");
+            assertThat(result.output())
+                .as("global-scope marketplaces must not produce a not-found warning")
+                .doesNotContain("(not found in marketplace)")
+                .doesNotContain("(unverified");
+        }
+
+        @Test
+        @DisplayName("should still warn when neither project nor global settings know the plugin")
+        void doctorWithGlobalMarketplace_stillWarnsForMissingPlugin(@TempDir Path marketplaceDir) throws Exception {
+            Files.createDirectories(marketplaceDir.resolve("other-plugin"));
+
+            var source = new MarketplaceSource("my-marketplace", marketplaceDir.toString(), null, null);
+
+            var globalSettings = new Settings().withExtraKnownMarketplaces(List.of(source));
+            settingsService.write(globalSettings, isolatedGlobalDir);
+
+            var settings = new Settings().withEnabledPlugins(Map.of("unknown-plugin@my-marketplace", true));
+            settingsService.write(settings, tempDir);
+
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
+
+            assertThat(result.output())
+                .as("merging global sources must not mask a genuinely absent plugin")
                 .contains("[WARNING] plugin enabled: unknown-plugin@my-marketplace (not found in marketplace)");
         }
 
@@ -269,7 +333,8 @@ class DoctorCommandTest {
             var settings = new Settings().withEnabledPlugins(Map.of("some-plugin", false));
             settingsService.write(settings, tempDir);
 
-            var result = run("doctor", "--project-dir", tempDir.toString());
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
             assertThat(result.exitCode()).isZero();
             assertThat(result.output())
@@ -346,7 +411,8 @@ class DoctorCommandTest {
         @Test
         @DisplayName("doctor output must not mention .claudeignore after migration to deny rules")
         void doctor_doesNotMentionClaudeIgnore() {
-            var result = run("doctor", "--project-dir", tempDir.toString());
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
 
             assertThat(result.output())
                 .as("doctor must not check for .claudeignore — "

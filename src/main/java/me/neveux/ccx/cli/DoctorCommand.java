@@ -75,6 +75,8 @@ public class DoctorCommand implements Callable<Integer> {
 
     private record SettingsCheckResult(boolean hasError, Settings settings, boolean readable) {}
 
+    private record GlobalSettingsResult(boolean present, Settings settings, String parseError) {}
+
     @Override
     public Integer call() {
         var dir = CommandUtil.resolveProjectDir(projectDir);
@@ -83,18 +85,20 @@ public class DoctorCommand implements Callable<Integer> {
         var out = spec.commandLine().getOut();
         var hasErrors = false;
 
+        var globalRoot = globalDir != null ? globalDir : Path.of(System.getProperty("user.home"));
+        var globalResult = readGlobalSettings(globalRoot);
+
         var settingsResult = checkSettingsFile(dir, out);
         hasErrors |= settingsResult.hasError();
         hasErrors |= checkClaudeMdRefs(dir, out);
         if (settingsResult.readable()) {
-            checkPlugins(settingsResult.settings(), out);
+            checkPlugins(settingsResult.settings(), globalResult.settings(), out);
             checkMcpServers(settingsResult.settings(), out);
             checkSkillOverrides(settingsResult.settings(), out);
             checkRulesDir(dir, out);
         }
         hasErrors |= checkDependencies(out);
-        var globalRoot = globalDir != null ? globalDir : Path.of(System.getProperty("user.home"));
-        hasErrors |= checkGlobalSettings(globalRoot, out);
+        hasErrors |= reportGlobalSettings(globalResult, out);
         hasErrors |= checkCcxConfig(out);
         hasErrors |= checkProfileDependencies(dir, out);
 
@@ -148,13 +152,13 @@ public class DoctorCommand implements Callable<Integer> {
         return hasError;
     }
 
-    private void checkPlugins(Settings settings, PrintWriter out) {
+    private void checkPlugins(Settings settings, Settings globalSettings, PrintWriter out) {
         if (settings.enabledPlugins() == null || settings.enabledPlugins().isEmpty()) {
             emit(out, "[INFO] 0 plugin(s) enabled");
             return;
         }
-        var marketplaceMap = (settings.extraKnownMarketplaces() != null && !settings.extraKnownMarketplaces().isEmpty())
-            ? pluginMapService.buildMap(settings)
+        var marketplaceMap = (hasMarketplaces(settings) || hasMarketplaces(globalSettings))
+            ? pluginMapService.buildMap(settings, globalSettings)
             : null;
         settings.enabledPlugins().forEach((pluginKey, enabled) -> {
             if (!enabled) {
@@ -167,6 +171,10 @@ public class DoctorCommand implements Callable<Integer> {
                 emit(out, "[WARNING] plugin enabled: " + pluginKey + " (not found in marketplace)");
             }
         });
+    }
+
+    private static boolean hasMarketplaces(Settings settings) {
+        return settings.extraKnownMarketplaces() != null && !settings.extraKnownMarketplaces().isEmpty();
     }
 
     private void checkMcpServers(Settings settings, PrintWriter out) {
@@ -233,21 +241,35 @@ public class DoctorCommand implements Callable<Integer> {
         return hasError;
     }
 
-    private boolean checkGlobalSettings(Path globalRoot, PrintWriter out) {
+    /**
+     * Reads the user-level {@code settings.json} once, so both the global-settings check and the
+     * plugin marketplace verification can share the result without hitting the file twice.
+     */
+    private GlobalSettingsResult readGlobalSettings(Path globalRoot) {
         var globalSettingsFile = globalRoot.resolve(".claude/settings.json");
         if (!Files.exists(globalSettingsFile)) {
-            return false;
+            return new GlobalSettingsResult(false, new Settings(), null);
         }
         try {
-            var globalSettings = settingsService.readOrThrow(globalRoot);
-            int globalPluginCount = globalSettings.enabledPlugins() == null ? 0 : globalSettings.enabledPlugins().size();
-            emit(out, "[INFO] global plugins: " + globalPluginCount);
-            return false;
+            return new GlobalSettingsResult(true, settingsService.readOrThrow(globalRoot), null);
         } catch (IOException e) {
-            emit(out, "[ERROR] global settings.json is malformed: " + e.getMessage());
             log.debug("global settings.json malformed path={}", globalSettingsFile, e);
+            return new GlobalSettingsResult(true, new Settings(), e.getMessage());
+        }
+    }
+
+    private boolean reportGlobalSettings(GlobalSettingsResult globalResult, PrintWriter out) {
+        if (!globalResult.present()) {
+            return false;
+        }
+        if (globalResult.parseError() != null) {
+            emit(out, "[ERROR] global settings.json is malformed: " + globalResult.parseError());
             return true;
         }
+        var globalSettings = globalResult.settings();
+        int globalPluginCount = globalSettings.enabledPlugins() == null ? 0 : globalSettings.enabledPlugins().size();
+        emit(out, "[INFO] global plugins: " + globalPluginCount);
+        return false;
     }
 
     private boolean checkCcxConfig(PrintWriter out) {
