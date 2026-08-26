@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-26
+
+### Fixed
+
+- Marketplaces now resolve from Claude Code's own registry
+  (`~/.claude/plugins/known_marketplaces.json`) before ccx tries to clone them. A
+  marketplace on a private GitHub repository previously never resolved — ccx cloned
+  over https with `GIT_TERMINAL_PROMPT=0` and could not authenticate — so every
+  plugin from it reported `not found in marketplace`. A marketplace registered only
+  with Claude Code and absent from every `settings.json` is now discovered too.
+- `ccx doctor` verifies enabled plugins against user-scope `extraKnownMarketplaces`
+  as well as project-scope ones. A plugin from a marketplace declared only in
+  `~/.claude/settings.json` previously reported as unverifiable.
+- Plugin short-name resolution is first-wins, so a project-scope marketplace is no
+  longer shadowed by a global one declaring the same plugin name — the previous
+  last-wins behaviour contradicted `mergeSources()`.
+
 ## [0.3.1] - 2026-08-12
 
 ### Fixed
