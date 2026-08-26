@@ -45,17 +45,22 @@ public class PluginMapService {
 
     private final ObjectMapper mapper;
     private final MarketplaceCloneService marketplaceCloneService;
+    private final ClaudeMarketplaceRegistryService claudeMarketplaceRegistryService;
     private volatile Map<String, String> lastDescriptions = Map.of();
 
     public PluginMapService() {
         this.mapper = ObjectMapperConfig.defaultJson();
         this.marketplaceCloneService = new MarketplaceCloneService();
+        this.claudeMarketplaceRegistryService = new ClaudeMarketplaceRegistryService();
     }
 
     @Inject
-    public PluginMapService(@Named("jsonMapper") ObjectMapper mapper, MarketplaceCloneService marketplaceCloneService) {
+    public PluginMapService(@Named("jsonMapper") ObjectMapper mapper,
+                            MarketplaceCloneService marketplaceCloneService,
+                            ClaudeMarketplaceRegistryService claudeMarketplaceRegistryService) {
         this.mapper = mapper;
         this.marketplaceCloneService = marketplaceCloneService;
+        this.claudeMarketplaceRegistryService = claudeMarketplaceRegistryService;
     }
 
     /**
@@ -167,7 +172,10 @@ public class PluginMapService {
         var descriptionMap = new HashMap<String, String>();
         if (sources == null) return result;
 
-        for (var source : sources) {
+        // Claude Code's registry wins over the declared descriptor: its clones are already
+        // local and already authenticated, so a private github marketplace resolves here even
+        // though MarketplaceCloneService cannot clone it.
+        for (var source : claudeMarketplaceRegistryService.withInstalledLocations(sources)) {
             Path dir;
             if (!allowFetch && "github".equals(source.sourceType())) {
                 dir = marketplaceCloneService.localCacheDir(source.key());
@@ -207,10 +215,10 @@ public class PluginMapService {
                         for (var plugin : manifest.plugins()) {
                             if (plugin == null || plugin.name() == null) continue;
                             var qualified = plugin.name() + "@" + source.key();
-                            result.put(useQualifiedKeys ? qualified : plugin.name(), qualified);
+                            result.putIfAbsent(useQualifiedKeys ? qualified : plugin.name(), qualified);
                             if (plugin.description() != null && !plugin.description().isBlank()) {
-                                descriptionMap.put(qualified, plugin.description());
-                                descriptionMap.put(plugin.name(), plugin.description());
+                                descriptionMap.putIfAbsent(qualified, plugin.description());
+                                descriptionMap.putIfAbsent(plugin.name(), plugin.description());
                             }
                             log.debug("discovered plugin (manifest) name={} qualified={}", plugin.name(), qualified);
                         }
@@ -228,7 +236,7 @@ public class PluginMapService {
                       .forEach(subdir -> {
                           var pluginName = subdir.getFileName().toString();
                           var qualified = pluginName + "@" + source.key();
-                          result.put(useQualifiedKeys ? qualified : pluginName, qualified);
+                          result.putIfAbsent(useQualifiedKeys ? qualified : pluginName, qualified);
                           log.debug("discovered plugin (scan) name={} qualified={}", pluginName, pluginName + "@" + source.key());
                       });
             } catch (IOException e) {

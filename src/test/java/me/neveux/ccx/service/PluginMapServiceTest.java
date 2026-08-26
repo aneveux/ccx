@@ -28,7 +28,21 @@ class PluginMapServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PluginMapService();
+        service = new PluginMapService(me.neveux.ccx.config.ObjectMapperConfig.defaultJson(),
+            new MarketplaceCloneService(), registryServiceWithout(tempDir.resolve("no-registry.json")));
+    }
+
+    /**
+     * A registry service pointed at {@code missingFile} so the developer's real
+     * {@code ~/.claude/plugins/known_marketplaces.json} never leaks into assertions.
+     */
+    private static ClaudeMarketplaceRegistryService registryServiceWithout(Path missingFile) {
+        return new ClaudeMarketplaceRegistryService() {
+            @Override
+            protected Path registryFile() {
+                return missingFile;
+            }
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -240,7 +254,8 @@ class PluginMapServiceTest {
                     return "cloned-mkt".equals(key) ? tempDir : super.localCacheDir(key);
                 }
             };
-            var svc = new PluginMapService(me.neveux.ccx.config.ObjectMapperConfig.defaultJson(), cloneService);
+            var svc = new PluginMapService(me.neveux.ccx.config.ObjectMapperConfig.defaultJson(), cloneService,
+                registryServiceWithout(tempDir.resolve("no-registry.json")));
 
             var source = new MarketplaceSource("cloned-mkt", null, "github", "owner/repo");
             var result = svc.buildMapNoFetch(List.of(source));
@@ -248,6 +263,95 @@ class PluginMapServiceTest {
             assertThat(result)
                 .as("github source with local clone dir must return plugins without fetching")
                 .containsKey("cool-plugin@cloned-mkt");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Claude Code marketplace registry augmentation
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("buildMap() with Claude Code's marketplace registry")
+    class WithClaudeMarketplaceRegistry {
+
+        private PluginMapService serviceReadingRegistry(Path registryFile) {
+            var registryService = new ClaudeMarketplaceRegistryService() {
+                @Override
+                protected Path registryFile() {
+                    return registryFile;
+                }
+            };
+            return new PluginMapService(me.neveux.ccx.config.ObjectMapperConfig.defaultJson(),
+                new MarketplaceCloneService(), registryService);
+        }
+
+        @Test
+        @DisplayName("a private github marketplace resolves through Claude Code's clone")
+        void privateGithubSource_resolvesFromRegistry() throws Exception {
+            var installed = Files.createDirectories(tempDir.resolve("marketplaces/cloudbees-marketplace"));
+            Files.createDirectories(installed.resolve(".claude-plugin"));
+            Files.writeString(installed.resolve(".claude-plugin/marketplace.json"), """
+                {"plugins": [{"name": "cloudbees-context", "source": "./cloudbees-context"}]}
+                """);
+            var registryFile = tempDir.resolve("known_marketplaces.json");
+            Files.writeString(registryFile, """
+                {"cloudbees-marketplace": {"installLocation": "%s"}}
+                """.formatted(installed));
+
+            var source = new MarketplaceSource(
+                "cloudbees-marketplace", null, "github", "cloudbees/cloudbees-claude-plugins");
+            var result = serviceReadingRegistry(registryFile).buildMap(List.of(source));
+
+            assertThat(result)
+                .as("ccx cannot clone the private repo, so it must read Claude Code's clone instead")
+                .containsEntry("cloudbees-context", "cloudbees-context@cloudbees-marketplace");
+        }
+
+        @Test
+        @DisplayName("a marketplace registered only with Claude Code still yields its plugins")
+        void registryOnlyMarketplace_yieldsPlugins() throws Exception {
+            var installed = Files.createDirectories(tempDir.resolve("dev"));
+            Files.createDirectories(installed.resolve(".claude-plugin"));
+            Files.writeString(installed.resolve(".claude-plugin/marketplace.json"), """
+                {"plugins": [{"name": "cloudbees-docs-dev", "source": "./cloudbees-docs-dev"}]}
+                """);
+            var registryFile = tempDir.resolve("known_marketplaces.json");
+            Files.writeString(registryFile, """
+                {"cloudbees-dev-marketplace": {"installLocation": "%s"}}
+                """.formatted(installed));
+
+            var declared = new MarketplaceSource("unrelated", tempDir.resolve("unrelated").toString(), "directory", null);
+            var result = serviceReadingRegistry(registryFile).buildMap(List.of(declared));
+
+            assertThat(result)
+                .as("a marketplace absent from every settings.json is still loaded by Claude Code")
+                .containsEntry("cloudbees-docs-dev", "cloudbees-docs-dev@cloudbees-dev-marketplace");
+        }
+
+        @Test
+        @DisplayName("a declared marketplace wins the short name over a registry-only one")
+        void shortNameCollision_declaredSourceWins() throws Exception {
+            var declaredDir = tempDir.resolve("declared");
+            Files.createDirectories(declaredDir.resolve(".claude-plugin"));
+            Files.writeString(declaredDir.resolve(".claude-plugin/marketplace.json"), """
+                {"plugins": [{"name": "java", "source": "./java"}]}
+                """);
+            var registryOnlyDir = tempDir.resolve("registry-only");
+            Files.createDirectories(registryOnlyDir.resolve(".claude-plugin"));
+            Files.writeString(registryOnlyDir.resolve(".claude-plugin/marketplace.json"), """
+                {"plugins": [{"name": "java", "source": "./java"}]}
+                """);
+            var registryFile = tempDir.resolve("known_marketplaces.json");
+            Files.writeString(registryFile, """
+                {"other-mkt": {"installLocation": "%s"}}
+                """.formatted(registryOnlyDir));
+
+            var declared = new MarketplaceSource("my-mkt", declaredDir.toString(), "directory", null);
+            var result = serviceReadingRegistry(registryFile).buildMap(List.of(declared));
+
+            assertThat(result)
+                .as("an explicitly declared marketplace must not be shadowed by one only Claude Code knows")
+                .containsEntry("java", "java@my-mkt");
         }
     }
 
