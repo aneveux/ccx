@@ -20,12 +20,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("TuiActions")
 class TuiActionsTest {
+
+    /** Deliberately reverse-alphabetical: a hash-ordered map cannot reproduce this order. */
+    private static final List<String> ORDERED_PLUGIN_NAMES = List.of(
+        "zeta@stack", "yankee@stack", "xray@stack", "whiskey@stack",
+        "victor@stack", "uniform@stack", "tango@stack", "sierra@stack");
 
     @TempDir
     Path projectDir;
@@ -76,6 +82,23 @@ class TuiActionsTest {
             assertThat(written.enabledPlugins())
                 .as("plugin must be removed from settings after toggle-off")
                 .doesNotContainKey("java@stack");
+        }
+
+        @Test
+        @DisplayName("should keep the surviving plugin keys in their original order")
+        void togglePlugin_preservesEnabledPluginKeyOrder() {
+            var enabledPlugins = new LinkedHashMap<String, Boolean>();
+            for (var name : ORDERED_PLUGIN_NAMES) {
+                enabledPlugins.put(name, true);
+            }
+            settingsService.write(new Settings().withEnabledPlugins(enabledPlugins), projectDir);
+
+            actions.togglePlugin("sierra@stack", projectDir);
+
+            assertThat(settingsService.read(projectDir).enabledPlugins().keySet())
+                .as("a toggle must not reorder the rest of the user's settings.json")
+                .containsExactly("zeta@stack", "yankee@stack", "xray@stack", "whiskey@stack",
+                    "victor@stack", "uniform@stack", "tango@stack");
         }
 
         @Test
@@ -158,6 +181,23 @@ class TuiActionsTest {
             assertThat(snap.mcpServers())
                 .as("snapshot must no longer contain the removed server")
                 .doesNotContainKey("my-server");
+        }
+
+        @Test
+        @DisplayName("should keep the surviving MCP server keys in their original order")
+        void toggleMcp_preservesMcpServerKeyOrder() {
+            var mcpServers = new LinkedHashMap<String, McpServer>();
+            for (var name : ORDERED_PLUGIN_NAMES) {
+                mcpServers.put(name, new McpServer("http", "https://" + name, null, null));
+            }
+            settingsService.write(new Settings().withMcpServers(mcpServers), projectDir);
+
+            actions.toggleMcp("sierra@stack", projectDir);
+
+            assertThat(settingsService.read(projectDir).mcpServers().keySet())
+                .as("a toggle must not reorder the rest of the user's settings.json")
+                .containsExactly("zeta@stack", "yankee@stack", "xray@stack", "whiskey@stack",
+                    "victor@stack", "uniform@stack", "tango@stack");
         }
 
         @Test

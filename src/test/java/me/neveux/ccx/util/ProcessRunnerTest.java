@@ -72,6 +72,45 @@ class ProcessRunnerTest {
     }
 
     @Test
+    @DisplayName("giving up on the output drain is reported, not returned as empty output")
+    void drainedOutput_whenDrainDoesNotFinish_marksTheOutputUnavailable() throws InterruptedException {
+        var release = new CountDownLatch(1);
+        var stuckDrain = Thread.ofVirtual().start(() -> {
+            try {
+                release.await();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        try {
+            var output = ProcessRunner.drainedOutput(stuckDrain, new String[1],
+                List.of("claude", "plugin", "install"), 100);
+
+            assertThat(output)
+                .as("a caller surfacing this string to the user must be able to tell \"we stopped "
+                    + "reading\" from \"the command printed nothing\"")
+                .isEqualTo(ProcessRunner.OUTPUT_UNAVAILABLE);
+        } finally {
+            release.countDown();
+            stuckDrain.join();
+        }
+    }
+
+    @Test
+    @DisplayName("a drain that finished hands back exactly what it captured")
+    void drainedOutput_whenDrainFinished_returnsCapturedOutput() throws InterruptedException {
+        var captured = new String[] {""};
+        var finishedDrain = Thread.ofVirtual().start(() -> captured[0] = "installed 3 plugins");
+        finishedDrain.join();
+
+        var output = ProcessRunner.drainedOutput(finishedDrain, captured, List.of("claude"), 100);
+
+        assertThat(output)
+            .as("an empty-but-complete read and a given-up read must not collapse into one value")
+            .isEqualTo("installed 3 plugins");
+    }
+
+    @Test
     @DisplayName("an interrupted wait rethrows as IOException and leaves the interrupt flag set")
     void run_whenWaitInterrupted_restoresInterruptFlag() throws InterruptedException {
         var thrown = new AtomicReference<Throwable>();

@@ -12,7 +12,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -58,7 +58,7 @@ public final class TuiActions {
         }
         try {
             var settings = settingsService.readForUpdate(projectDir);
-            var enabledPlugins = new HashMap<>(settings.enabledPlugins() != null ? settings.enabledPlugins() : Map.<String, Boolean>of());
+            var enabledPlugins = new LinkedHashMap<>(settings.enabledPlugins() != null ? settings.enabledPlugins() : Map.<String, Boolean>of());
             if (enabledPlugins.containsKey(pluginName)) {
                 enabledPlugins.remove(pluginName);
                 log.debug("plugin disabled name={} projectDir={}", pluginName, projectDir);
@@ -78,7 +78,7 @@ public final class TuiActions {
         try {
             var settings = settingsService.readForUpdate(projectDir);
             if (settings.mcpServers() != null && settings.mcpServers().containsKey(serverName)) {
-                var mcpServers = new HashMap<>(settings.mcpServers());
+                var mcpServers = new LinkedHashMap<>(settings.mcpServers());
                 mcpServers.remove(serverName);
                 log.debug("mcp server disabled name={} projectDir={}", serverName, projectDir);
                 settingsService.write(settings.withMcpServers(mcpServers), projectDir);

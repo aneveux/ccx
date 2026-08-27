@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking.** `ccx clean` no longer modifies anything without `--force`. A bare
+  `ccx clean` always prints what would be removed and exits. It previously destroyed
+  ccx-managed configuration whenever a TTY was present — with no confirmation, though
+  `--help` advertised one — and only performed a dry run when no TTY was available.
+- **Breaking.** A profile's `claudeMd.fragments` list is now honoured. A profile that
+  declares the list contributes exactly those files, in declaration order, and an empty
+  list contributes nothing; only a profile with no `fragments` key still falls back to
+  globbing `claudemd/*.md`. The declared list was previously deserialized and ignored, so
+  every profile contributed its whole `claudemd/` directory regardless. A declared name
+  resolves against the profile's own directory before the shared one, with or without the
+  `.md` suffix, and must land on a regular file inside the ccx config directory.
+- `ccx profiles disable` now removes the `permissions.allow` and `permissions.deny`
+  entries the profile contributed, sibling-aware: a rule another enabled profile still
+  contributes is kept. Disabling previously stranded every permission rule it had added.
+- The five read-only `plugins` and `skills` subcommands that printed a path-security
+  rejection and then exited 0 now exit 1, matching their write-command siblings and the
+  documented contract.
+- `ccx doctor` exits 1 on an `[ERROR]` only; the `(not found in marketplace)`
+  `[WARNING]` is deliberately non-failing. The Javadoc and README previously claimed
+  either would fail the command.
+- Both CI workflows pin GraalVM 25.0.2 exactly rather than asking for whatever 25.x is
+  current, so a release binary is reproducible.
+
+### Fixed
+
+- ccx no longer replaces a `settings.json` it could not parse. Every read-modify-write
+  path now goes through a strict read that refuses on a parse failure. The lenient read
+  returned empty settings on a malformed file, so the next write replaced the user's
+  entire configuration; it is now confined to read-only paths, where a broken file must
+  still be inspectable.
+- `permissions` and `mcpServers` keys ccx does not model survive a write. `defaultMode`,
+  `ask`, `additionalDirectories` and per-server `env` / `headers` were previously dropped
+  at every nesting level.
+- The `CLAUDE.md` marker block is normalised to exactly one well-formed instance on every
+  write. A file with two blocks, an inverted marker pair, or a truncated begin marker
+  previously ended up with nested blocks and a duplicated `@fragment` line per write.
+- Profile cycle detection keys off the registry key instead of the user-editable
+  `metadata.name`. A profile with no `metadata` block used to overflow the stack, and a
+  copied profile directory whose metadata name was never edited faked a cycle. Diamond
+  inheritance resolves correctly.
+- The marketplace clone cache verifies that an existing clone's origin matches the
+  declared repository, so a clone left by another project cannot be read as the requested
+  marketplace. `""` and `"."` are rejected as marketplace keys.
+- A truncated plugin-map cache — one whose `entries` field is absent — is rebuilt instead
+  of throwing.
+- Holding the TUI refresh key no longer starts two concurrent fetches in the same clone:
+  the in-flight guard is claimed on the calling thread. A fetch that failed no longer
+  reports itself as a fresh cache of 0 plugins.
+- Skill discovery resolves marketplaces through Claude Code's own registry, so a github
+  marketplace Claude Code has already cloned is scanned rather than skipped.
+- `ccx clean` refuses before removing anything when `settings.json` is corrupt — a
+  half-cleaned project is worse than a refused clean.
+- The TUI Overview tab distinguishes an unreadable `.claude/settings.json` from an empty
+  one; it previously rendered zeroes, reading as "nothing is configured here".
+
 ## [0.4.0] - 2026-08-27
 
 ### Added

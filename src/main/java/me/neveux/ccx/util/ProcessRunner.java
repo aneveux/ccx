@@ -1,5 +1,8 @@
 package me.neveux.ccx.util;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -19,6 +22,18 @@ import java.util.concurrent.TimeUnit;
  * allowlist before calling in.
  */
 public final class ProcessRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(ProcessRunner.class);
+
+    private static final long DRAIN_TIMEOUT_MILLIS = 5000;
+
+    /**
+     * Stands in for the output when draining the child's stdout did not finish in time. The
+     * captured output is the only diagnostic a caller such as a failed plugin install ever shows
+     * the user, so "we stopped reading" must not be indistinguishable from "the command printed
+     * nothing".
+     */
+    public static final String OUTPUT_UNAVAILABLE = "(output unavailable: ccx stopped reading the command's output)";
 
     private ProcessRunner() {}
 
@@ -77,12 +92,31 @@ public final class ProcessRunner {
                 drainThread.join(1000);
                 throw new IOException("command timed out after " + timeoutSeconds + "s: " + args);
             }
-            drainThread.join(5000);
-            return new ProcessResult(process.exitValue(), outputRef[0] != null ? outputRef[0] : "");
+            var output = drainedOutput(drainThread, outputRef, args, DRAIN_TIMEOUT_MILLIS);
+            return new ProcessResult(process.exitValue(), output);
         } catch (InterruptedException e) {
             process.destroyForcibly();
             Thread.currentThread().interrupt();
             throw new IOException("command interrupted: " + args, e);
         }
+    }
+
+    /**
+     * Waits up to {@code timeoutMillis} for the drain to finish and returns what it captured, or
+     * {@link #OUTPUT_UNAVAILABLE} when it did not finish. Package-private so the give-up branch can
+     * be driven directly: provoking a stuck drain through a real subprocess is a race, because the
+     * JDK's process reaper buffers and closes the pipe as soon as the direct child exits.
+     */
+    static String drainedOutput(Thread drainThread, String[] outputRef, List<String> args, long timeoutMillis)
+        throws InterruptedException {
+
+        drainThread.join(timeoutMillis);
+        var output = outputRef[0];
+        if (drainThread.isAlive() || output == null) {
+            log.warn("gave up reading output after {}ms — something still holds the pipe open: {}",
+                timeoutMillis, args);
+            return OUTPUT_UNAVAILABLE;
+        }
+        return output;
     }
 }
