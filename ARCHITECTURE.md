@@ -16,11 +16,13 @@ Key services:
 - `SettingsService` — reads/writes `.claude/settings.json`
 - `ProfileService` — loads and resolves profile YAML from the on-disk ccx config dir; supports multi-level inheritance
 - `ProfileApplyService` — applies a resolved profile (plugins, fragments, rules, permissions) to a project; also removes profile resources
+- `ProfileLifecycleService` — the enable/disable/reinstall lifecycle of a profile in a project (extends closure, already-enabled skipping, snapshot revert), shared by `ProfilesCommand` and the TUI so both answer "what does enabling do" identically; installing plugins is left to the caller
 - `CcxContextService` — manages `.ccx/context.json` lock file tracking which profiles are enabled and their installation snapshot; provides drift detection
 - `ClaudeMdService` — reads/writes the `<!-- ccx:begin -->`…`<!-- ccx:end -->` marker block in `CLAUDE.md`
 - `PluginMapService` — discovers and maps plugin short names to qualified keys from marketplace directories
 - `SkillsService` — discovers skills from configured marketplace paths
 - `MarketplaceCloneService` — clones/pulls marketplace plugin repositories for offline discovery
+- `ClaudeMarketplaceRegistryService` — read-only view of Claude Code's `~/.claude/plugins/known_marketplaces.json`: supplies the local directory of a marketplace Claude Code already knows, so plugin short-name resolution and skill discovery work without a ccx-declared path (0.3.2)
 - `ClaudePluginRegistryService` — read-only view of Claude Code's `~/.claude/plugins/installed_plugins.json`: which enabled plugins are actually installed for a project (see ADR-015)
 - `ClaudePluginInstallService` — runs `claude plugin install <plugin>@<marketplace> --scope project` in the project directory; never throws, reports a status instead
 
@@ -65,7 +67,7 @@ CDI producer class `ObjectMapperConfig`: produces `@Named("jsonMapper")` (Jackso
 
 ```
 cli/
-  ProfilesCommand    → ProfileApplyService, CcxContextService, ProfileService, CcxConfigService, SettingsService,
+  ProfilesCommand    → ProfileLifecycleService, ProfileService, CcxContextService, CcxConfigService, SettingsService,
                         ClaudePluginRegistryService, ClaudePluginInstallService
   PluginsCommand     → SettingsService, PluginMapService, MarketplaceCloneService,
                         ClaudePluginRegistryService, ClaudePluginInstallService
@@ -77,26 +79,27 @@ cli/
   StatusCommand      → SettingsService, ClaudeMdService
   CleanCommand       → SettingsService, ClaudeMdService
   ConfigCommand      → CcxConfigService
-  TuiCommand         → TuiDataService, ProfileApplyService, CcxContextService, ProfileService,
+  TuiCommand         → TuiDataService, ProfileLifecycleService,
                         SettingsService, ClaudeMdService, MarketplaceCloneService, PluginMapService
   (`init` and `compose` top-level commands were removed in plan 036 Wave 2; `resolveDependencyClosure` migrated to ProfileService. Profile `ignore:` patterns are applied by ProfileApplyService as `permissions.deny` rules — see ADR-014.)
 
 service/
+  ProfileLifecycleService → ProfileService, ProfileApplyService, CcxContextService
   ProfileApplyService   → SettingsService, ClaudeMdService, PluginMapService, CcxConfigService
   CcxContextService     → ClaudeMdService (for readMarkerBlock, fragment drift check)
   ProfileService        → CcxConfigService (loads YAML from config dir)
   SettingsService       (no service deps — Jackson + filesystem)
   ClaudeMdService       (no service deps — filesystem only)
-  SkillsService         → SettingsService
-  PluginMapService      → MarketplaceCloneService (Jackson + filesystem)
+  SkillsService         → SettingsService, ClaudeMarketplaceRegistryService
+  PluginMapService      → MarketplaceCloneService, ClaudeMarketplaceRegistryService (Jackson + filesystem)
+  ClaudeMarketplaceRegistryService  (no service deps — Jackson + filesystem, read-only)
   ClaudePluginRegistryService  (no service deps — Jackson + filesystem, read-only)
   ClaudePluginInstallService   → ProcessRunner (spawns the `claude` CLI)
 
 tui/
   TuiDataService     → SettingsService, ClaudeMdService, CcxContextService,
                         ProfileService, PluginMapService, CcxConfigService
-  TuiActions         → SettingsService, ClaudeMdService, TuiDataService,
-                        ProfileApplyService, CcxContextService, ProfileService
+  TuiActions         → SettingsService, ClaudeMdService, TuiDataService, ProfileLifecycleService
   CcxApp             (plain Java; constructed by TuiCommand with injected services)
   PluginInstallController → SettingsService, ClaudePluginRegistryService, ClaudePluginInstallService
                      (plain Java; owned by CcxApp; runs installs off the render thread)
@@ -104,13 +107,16 @@ tui/
                      (OverviewTab is a standalone final class; it does not extend FilterableTab)
 ```
 
-Dependency direction: `cli → service → model`. The `tui` package depends on `service` and `model` but CLI commands do not import TUI classes (except `TuiCommand` which instantiates `CcxApp`).
+Dependency direction: `cli → service → model`. The `tui` package depends on `service` and `model`.
+CLI classes may depend on exactly two things in `tui`: the shared presentation tokens `tui.Glyphs`
+(via `cli.CliFormat`) and `tui.Quips`, both plain constant holders. Nothing else — no tab, state, or
+runner type — may be imported from `tui`, except by `TuiCommand`, which instantiates `CcxApp`.
 
 ## Data Flow
 
 ### CLI command: `ccx profiles enable java --project-dir .`
 
-1. Picocli parses args → routes to `ProfilesCommand.EnableCommand.call()`
+1. Picocli parses args → routes to `ProfilesCommand.EnableCommand.call()`, which delegates the whole state change to `ProfileLifecycleService.enable("java", dir)` (steps 2-5) and then installs plugins (step 6)
 2. `ProfileService.load("java")` → reads `~/.config/ccx/profiles/java/profile.yaml` from disk (validates the leaf exists before anything is written)
 3. `ProfileService.resolveDependencyClosure("java")` → the `extends` closure in dependency-first order, leaf last. Each member is then `load()`ed and applied individually — a member already recorded in `.ccx/context.json` is skipped, so re-enabling never re-stamps an existing record
 4. `ProfileApplyService.apply(member, dir, false, context)` per member:
@@ -128,15 +134,17 @@ Dependency direction: `cli → service → model`. The `tui` package depends on 
    - Reads `.ccx/context.json`
    - Adds the profile record with timestamp + snapshot
    - Writes `.ccx/context.json` atomically
-6. list/confirmation commands print to stdout via the picocli `PrintWriter` + `out.flush()` (the `InlineRenderer` interactive path was removed in plan 036 Wave 3)
+6. `PluginsCommand.installMissingPlugins(dir)` → `ClaudePluginInstallService.installAll(...)` for every enabled plugin Claude Code has not installed for this project, spawning `claude plugin install <plugin>@<marketplace> --scope project` in the project dir via `util/ProcessRunner`. This is the only step that runs an external binary; a missing `claude` binary or a failed install prints a warning and leaves the exit code at 0 (ADR-015)
+7. list/confirmation commands print to stdout via the picocli `PrintWriter` + `out.flush()` (the `InlineRenderer` interactive path was removed in plan 036 Wave 3)
 
-### TUI refresh after action (e.g. pressing `e` on Profiles tab)
+### TUI refresh after action (e.g. pressing `Enter` on Profiles tab)
 
 1. `CcxApp.handleEvent()` → dispatches to `handleProfileAction("enable")`
-2. `TuiActions.enableProfile(name, projectDir)` → calls services (same as above)
+2. `TuiActions.enableProfile(name, projectDir)` → `ProfileLifecycleService.enable(...)`, the same service the CLI calls (steps 2-5 above); a failure becomes a footer message rather than an exception
 3. Returns new `TuiSnapshot` from `TuiDataService.snapshot(projectDir)`
 4. `TuiState.setSnapshot(newSnap)` — replaces immutable snapshot
-5. Tamboui calls `CcxApp.renderFrame()` on next tick → all tabs re-render from new snapshot (pure)
+5. On a successful enable or reinstall, `CcxApp` calls `PluginInstallController.installEnabledPlugins()`, which runs the same `claude plugin install` subprocesses for every enabled-but-uninstalled plugin on a background executor so the render thread never blocks; each result lands in the footer and flags a refresh (ADR-015)
+6. Tamboui calls `CcxApp.renderFrame()` on next tick → all tabs re-render from new snapshot (pure)
 
 ## Boundaries
 

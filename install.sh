@@ -35,8 +35,12 @@ else
 	# Verify only the `ccx` line: the grouping file lists every artifact of every active
 	# distribution, and `sha256sum -c` fails on any line whose file is absent locally.
 	# `set -o pipefail` makes a non-matching grep fail the pipeline closed.
+	#
+	# This detects a corrupted or truncated download, not tampering: the sidecar is unsigned
+	# and fetched from the same release, so anyone able to replace the binary can replace the
+	# checksum with it. Signing the release is a tracked follow-up.
 	(cd "$tmp" && grep ' ccx$' checksums_sha256.txt | sha256sum -c -) || {
-		echo "error: checksum verification failed — the download may be corrupted or tampered with. Aborting." >&2
+		echo "error: checksum verification failed — the download does not match its published SHA-256. Aborting." >&2
 		exit 1
 	}
 fi

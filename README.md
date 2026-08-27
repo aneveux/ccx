@@ -34,7 +34,8 @@ CCX_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/anev
 The installer downloads the latest Linux x86_64 binary, **verifies its SHA-256
 checksum before installing (fail-closed — it aborts on a missing or mismatched
 checksum)**, then moves the binary into the install directory. Set
-`CCX_SKIP_CHECKSUM=1` only if you understand the risk.
+`CCX_SKIP_CHECKSUM=1` only if you understand the risk. Pin a specific release with
+`CCX_VERSION` (a tag such as `v0.4.0`; defaults to `latest`).
 
 Or download a binary directly from [Releases](https://github.com/aneveux/ccx/releases/latest).
 
@@ -67,7 +68,7 @@ mvn package -Pnative
 
 | Command      | Description                                        |
 |--------------|----------------------------------------------------|
-| `clean`      | Remove ccx-managed config from project             |
+| `clean`      | Remove ccx-managed config from project (`--force`) |
 | `doctor`     | Validate project configuration                     |
 | `status`     | Show current configuration summary                 |
 | `plugins`    | Enable/disable/list plugins                        |
@@ -82,11 +83,27 @@ mvn package -Pnative
 defaults to cwd). Read-only commands that resolve global config also accept
 `--global-dir` (the Claude config dir, defaults to `~/.claude`): `plugins list`,
 `plugins diff`, `plugins tags`, `plugins refresh`, `skills list`, `skills show`.
-`doctor` also accepts `--global-dir`, but defaults it to your home directory
-(it resolves `.claude/settings.json` underneath).
+`doctor` and `status` also accept `--global-dir`, but default it to your home
+directory (they resolve `.claude/settings.json` underneath).
 
 `doctor` additionally probes for `git`, `jq`, and `yq` on your `PATH` — a missing
-`git` is reported as `[WARNING]`, missing `jq`/`yq` as `[INFO]`.
+`git` is reported as `[WARNING]`, missing `jq`/`yq` as `[INFO]`. It exits `1` when
+any `[ERROR]` is found, or when `git` is missing; every other `[WARNING]` and
+`[INFO]` is advisory and leaves the exit code at `0`. In particular a plugin that
+resolves against no configured marketplace is a non-failing warning (ADR-015).
+
+### status and clean flags
+
+| Flag              | Command  | Description                                                       |
+|-------------------|----------|-------------------------------------------------------------------|
+| `--full`          | `status` | Also show global (`~/.claude`) configuration, not just the project |
+| `--force`         | `clean`  | Actually delete ccx-managed config — without it, `clean` only prints what it would remove |
+
+`clean` is a dry run by default: bare `ccx clean` reports the files and settings
+keys it would touch and changes nothing. `ccx clean --force` is the destructive
+form — it strips ccx-managed keys from `.claude/settings.json`, removes the ccx
+marker block from `.claude/CLAUDE.md`, deletes the rule and command files ccx
+installed, and drops `.ccx/context.json`.
 
 ### Profiles subcommands
 
@@ -344,7 +361,7 @@ ccx profiles new my-profile
 │       ├── profile.yaml      # the profile definition (see below)
 │       ├── rules/            # *.md rule files installed into .claude/rules/
 │       │   └── no-empty-catch.md
-│       ├── claudemd/         # *.md fragments injected into the CLAUDE.md block
+│       ├── claudemd/         # fragments for the CLAUDE.md block (see claudeMd.fragments)
 │       │   └── java.md
 │       └── commands/         # *.md command files
 │           └── ship.md
@@ -377,7 +394,7 @@ permissions:
     - "Bash(rm -rf *)"
 
 claudeMd:
-  fragments:
+  fragments:                # omit the key to inject every *.md in claudemd/
     - java                  # resolves to claudemd/java.md
 
 env:
@@ -443,10 +460,11 @@ Requires a real TTY.
 | Tab / S-Tab  | Next / previous tab                                 |
 | 1–5          | Jump to tab by number                               |
 | ↑ / ↓        | Navigate list (scroll on Overview)                  |
+| `j` / `k`    | Scroll down / up (Overview tab)                     |
 | `/`          | Focus filter bar                                    |
 | Esc          | Clear filter / blur filter bar                      |
-| Enter        | Context-dependent: toggle selected profile (Profiles), remove server (MCP), toggle fragment (CLAUDE.md) |
-| `e` / `d` / `r` | Enable / disable / reinstall profile (Profiles tab) |
+| Enter        | Toggle the selected item — profile, plugin, or CLAUDE.md fragment; removes the server on the MCP tab |
+| `r`          | Reinstall profile (Profiles tab)                    |
 | `r`          | Refresh marketplace (Plugins tab)                   |
 | `q`          | Quit                                                |
 | `?`          | Toggle help overlay                                 |
@@ -499,6 +517,7 @@ target with `CCX_INSTALL_DIR`; bypass verification (not recommended) with
 **Documented limits (current):**
 - **Linux x86_64 only.** The release builds and publishes a single
   `linux-x86_64` native binary; `install.sh` fetches only that binary.
-- **No macOS build yet.** macOS arm64 native builds and the Homebrew tap are
-  stubbed but disabled in `pom.xml` until a macOS native build job is added to
-  `release.yml`.
+- **No macOS build yet.** macOS builds and a Homebrew tap are not configured at
+  all: `pom.xml` declares a single `linux-x86_64` JReleaser artifact and no
+  packagers. Adding them means authoring the packager config and a macOS native
+  build job in `release.yml` from scratch.
