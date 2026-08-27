@@ -5,7 +5,9 @@ import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.ProfileApplyService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,9 +42,7 @@ class TuiActionsTest {
         tuiDataService = new TuiDataService(settingsService, claudeMdService,
             new com.fasterxml.jackson.databind.ObjectMapper());
         actions = new TuiActions(settingsService, claudeMdService, tuiDataService,
-            new me.neveux.ccx.service.ProfileApplyService(),
-            new me.neveux.ccx.service.CcxContextService(),
-            new me.neveux.ccx.service.ProfileService());
+            new ProfileLifecycleService());
         Files.createDirectories(projectDir.resolve(".claude"));
     }
 
@@ -305,14 +305,14 @@ class TuiActionsTest {
             var profileService = new ProfileService(buildYamlMapper(), ccxConfig);
             var applyService = new ProfileApplyService(
                 profileSettingsService, claudeMdService,
-                new me.neveux.ccx.service.PluginMapService(),
+                HomeIsolatedServices.pluginMapService(configDir.resolve("no-registry.json")),
                 ccxConfig);
             var tuiData = new TuiDataService(profileSettingsService, claudeMdService,
                 new com.fasterxml.jackson.databind.ObjectMapper());
 
             profileActions = new TuiActions(
                 profileSettingsService, claudeMdService, tuiData,
-                applyService, new CcxContextService(), profileService);
+                new ProfileLifecycleService(profileService, applyService, new CcxContextService()));
         }
 
         @Test

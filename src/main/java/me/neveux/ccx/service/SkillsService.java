@@ -21,8 +21,9 @@ import java.util.Set;
  * in {@code settings.json}.
  *
  * <p>Skills live under {@code <marketplace>/<pluginName>/skills/<skillName>/SKILL.md}.
- * Only local directory sources are scanned by this service — GitHub sources that have
- * not yet been cloned are silently skipped (the background clone happens in
+ * Only marketplaces that already have a local directory are scanned by this service — either
+ * declared as one or resolved to one through Claude Code's registry. A GitHub source with no
+ * clone yet is silently skipped; this service never clones (that happens in
  * {@link PluginMapService} / {@link MarketplaceCloneService}).
  *
  * <p>Override modes are validated against the set {@code {"user-invocable-only", "off"}}.
@@ -44,32 +45,43 @@ public class SkillsService {
     ) {}
 
     private final SettingsService settingsService;
+    private final ClaudeMarketplaceRegistryService claudeMarketplaceRegistryService;
 
     public SkillsService() {
         this.settingsService = new SettingsService();
+        this.claudeMarketplaceRegistryService = new ClaudeMarketplaceRegistryService();
     }
 
     @Inject
-    public SkillsService(SettingsService settingsService) {
+    public SkillsService(SettingsService settingsService,
+                         ClaudeMarketplaceRegistryService claudeMarketplaceRegistryService) {
         this.settingsService = settingsService;
+        this.claudeMarketplaceRegistryService = claudeMarketplaceRegistryService;
     }
 
     /**
-     * Scans all local directory marketplace sources in {@code settings} and returns every
-     * skill found (each directory under {@code <marketplace>/<plugin>/skills/} that
-     * contains a {@code SKILL.md} file).
+     * Scans every local marketplace directory reachable from {@code project} and {@code global}
+     * settings and returns each skill found (a directory under
+     * {@code <marketplace>/<plugin>/skills/} holding a {@code SKILL.md}).
      *
-     * @param settings project settings containing the marketplace sources to scan
+     * <p>Sources are resolved exactly as {@link PluginMapService#buildMap(Settings, Settings)}
+     * resolves them: project sources shadow global ones sharing a key, and Claude Code's own
+     * registry supplies the on-disk location of any marketplace it has already installed — so a
+     * github marketplace Claude Code has cloned is scanned here rather than skipped.
+     *
+     * @param project project settings whose marketplace sources are scanned first
+     * @param global  global settings ({@code ~/.claude/settings.json})
      * @return the discovered skills; never null, may be empty
      */
-    public List<SkillEntry> discoverSkills(Settings settings) {
-        if (settings.extraKnownMarketplaces() == null || settings.extraKnownMarketplaces().isEmpty()) {
+    public List<SkillEntry> discoverSkills(Settings project, Settings global) {
+        var merged = PluginMapService.mergeSources(project, global);
+        if (merged.isEmpty()) {
             return Collections.emptyList();
         }
 
         var results = new ArrayList<SkillEntry>();
 
-        for (var source : settings.extraKnownMarketplaces()) {
+        for (var source : claudeMarketplaceRegistryService.withInstalledLocations(merged)) {
             if ("github".equals(source.sourceType()) || source.path() == null) {
                 log.debug("skipping non-directory marketplace source key={} sourceType={}", source.key(), source.sourceType());
                 continue;

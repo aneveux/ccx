@@ -3,24 +3,33 @@ package me.neveux.ccx.tui;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.neveux.ccx.cli.TuiCommand;
-import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
-import me.neveux.ccx.service.ProfileApplyService;
-import me.neveux.ccx.service.ProfileService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.SettingsService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("TuiCommand — no-TTY guard")
 class TuiCommandNoTtyTest {
+
+    @TempDir
+    Path tempDir;
+
+    /** Never reads the developer's real marketplace registry — see {@link HomeIsolatedServices}. */
+    private PluginMapService isolatedPluginMapService() {
+        return HomeIsolatedServices.pluginMapService(tempDir.resolve("no-registry.json"));
+    }
 
     @Test
     @DisplayName("exits 1 requiring a TTY when no console is attached")
@@ -32,8 +41,8 @@ class TuiCommandNoTtyTest {
         var tuiDataService = new TuiDataService(settingsService, claudeMdService, new ObjectMapper());
         var cmd = new TuiCommand(
             tuiDataService, settingsService, claudeMdService,
-            new ProfileApplyService(), new CcxContextService(), new ProfileService(),
-            new MarketplaceCloneService(), new PluginMapService());
+            new ProfileLifecycleService(),
+            new MarketplaceCloneService(), isolatedPluginMapService());
 
         var cl = new CommandLine(cmd);
         cl.setOut(new PrintWriter(buf, true));
@@ -61,8 +70,8 @@ class TuiCommandNoTtyTest {
         var tuiDataService = new TuiDataService(settingsService, claudeMdService, new ObjectMapper());
         var cmd = new TuiCommand(
             tuiDataService, settingsService, claudeMdService,
-            new ProfileApplyService(), new CcxContextService(), new ProfileService(),
-            new MarketplaceCloneService(), new PluginMapService());
+            new ProfileLifecycleService(),
+            new MarketplaceCloneService(), isolatedPluginMapService());
 
         var cl = new CommandLine(cmd);
         cl.setOut(new PrintWriter(buf, true));

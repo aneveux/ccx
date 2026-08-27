@@ -50,13 +50,16 @@ public class SkillsCommand implements Runnable {
     }
 
     /**
-     * Discovers skills from the project settings and prints each one sorted by
-     * skill ID, prefixed with a glyph indicating its effective status:
+     * Discovers skills from the project's and the global marketplace sources and prints each one
+     * sorted by skill ID, prefixed with a glyph indicating its effective status:
      * {@code auto}, {@code user-invocable-only}, or {@code off}.
+     *
+     * <p>Returns 1 when a supplied path is rejected, so a caller can tell a rejection apart from
+     * a project where no skill was discovered; 0 otherwise.
      */
     @Command(name = "list", description = "List all discovered skills with their status")
     @RegisterForReflection
-    static class ListCommand implements Runnable {
+    static class ListCommand implements Callable<Integer> {
 
         @Inject
         SkillsService skillsService;
@@ -74,14 +77,14 @@ public class SkillsCommand implements Runnable {
         CommandLine.Model.CommandSpec spec;
 
         @Override
-        public void run() {
+        public Integer call() {
             var projDir = CommandUtil.resolveProjectDir(projectDir);
-            if (!CommandUtil.checkPathSecurity(projDir, spec)) return;
+            if (!CommandUtil.checkPathSecurity(projDir, spec)) return 1;
             var globDir = CommandUtil.resolveGlobalDir(globalDir);
-            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return;
+            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return 1;
 
-            var settings = settingsService.read(projDir);
-            var skills = skillsService.discoverSkills(settings);
+            var skills = skillsService.discoverSkills(
+                settingsService.read(projDir), settingsService.read(globDir));
 
             var out = spec.commandLine().getOut();
             skills.stream()
@@ -97,6 +100,7 @@ public class SkillsCommand implements Runnable {
                     out.println(icon + " " + skill.skillId());
                 });
             out.flush();
+            return 0;
         }
     }
 
@@ -181,10 +185,13 @@ public class SkillsCommand implements Runnable {
         }
     }
 
-    /** Prints the effective override status of a single skill, consulting both project and global settings. */
+    /**
+     * Prints the effective override status of a single skill, consulting both project and global
+     * settings. Returns 1 when a supplied path is rejected, 0 otherwise.
+     */
     @Command(name = "show", description = "Show the current override status of a skill")
     @RegisterForReflection
-    static class ShowCommand implements Runnable {
+    static class ShowCommand implements Callable<Integer> {
 
         @Inject
         SkillsService skillsService;
@@ -202,13 +209,14 @@ public class SkillsCommand implements Runnable {
         CommandLine.Model.CommandSpec spec;
 
         @Override
-        public void run() {
+        public Integer call() {
             var projDir = CommandUtil.resolveProjectDir(projectDir);
-            if (!CommandUtil.checkPathSecurity(projDir, spec)) return;
+            if (!CommandUtil.checkPathSecurity(projDir, spec)) return 1;
             var globDir = CommandUtil.resolveGlobalDir(globalDir);
-            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return;
+            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return 1;
             var status = skillsService.getStatus(skillId, projDir, globDir);
             spec.commandLine().getOut().println(skillId + ": " + status);
+            return 0;
         }
     }
 

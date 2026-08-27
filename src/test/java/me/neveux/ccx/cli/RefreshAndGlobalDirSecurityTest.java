@@ -1,6 +1,7 @@
 package me.neveux.ccx.cli;
 
 import me.neveux.ccx.service.CcxConfigService;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
@@ -41,7 +42,7 @@ class RefreshAndGlobalDirSecurityTest {
         // before it is used, so a real instance is harmless.
         var factory = new TestCommandFactory(
             settingsService, new ProfileService(), new PluginMapService(),
-            new ClaudeMdService(), new SkillsService(settingsService),
+            new ClaudeMdService(), new SkillsService(settingsService, new ClaudeMarketplaceRegistryService()),
             null, null, new CcxConfigService()
         );
         var refreshFactory = new TestCommandFactory(

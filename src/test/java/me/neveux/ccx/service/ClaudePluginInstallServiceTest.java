@@ -159,6 +159,222 @@ class ClaudePluginInstallServiceTest {
     }
 
     @Nested
+    @DisplayName("installAll()")
+    class InstallAll {
+
+        /** Fails exactly the plugins whose identifier is in {@code failing}, succeeds on the rest. */
+        private static class SelectivelyFailingService extends RecordingService {
+            private final List<String> failing;
+
+            SelectivelyFailingService(Path cli, List<String> failing) {
+                super(cli);
+                this.failing = failing;
+            }
+
+            @Override
+            protected ProcessResult runInstall(List<String> args, Path workingDir) throws IOException {
+                super.runInstall(args, workingDir);
+                return failing.stream().anyMatch(args::contains)
+                    ? new ProcessResult(1, "no such plugin")
+                    : new ProcessResult(0, "Installed plugin");
+            }
+        }
+
+        private static SelectivelyFailingService serviceFailing(Path tempDir, String... failing) throws IOException {
+            var cli = tempDir.resolve("claude");
+            Files.createFile(cli);
+            return new SelectivelyFailingService(cli, List.of(failing));
+        }
+
+        @Test
+        @DisplayName("attempts every plugin even after one fails, keyed in attempt order")
+        void oneFailure_doesNotStopTheOthers(@TempDir Path tempDir) throws Exception {
+            var service = serviceFailing(tempDir, "ghost@mkt");
+            var project = Files.createDirectory(tempDir.resolve("project"));
+
+            var results = service.installAll(List.of("first@mkt", "ghost@mkt", "third@mkt"), project);
+
+            assertThat(results.keySet())
+                .as("a marketplace that cannot resolve one plugin says nothing about the rest")
+                .containsExactly("first@mkt", "ghost@mkt", "third@mkt");
+            assertThat(results.get("first@mkt").status()).isEqualTo(ClaudePluginInstallService.Status.INSTALLED);
+            assertThat(results.get("ghost@mkt").status()).isEqualTo(ClaudePluginInstallService.Status.FAILED);
+            assertThat(results.get("third@mkt").status()).isEqualTo(ClaudePluginInstallService.Status.INSTALLED);
+            assertThat(service.invocations)
+                .as("all three installs must have been attempted")
+                .hasSize(3);
+        }
+
+        @Test
+        @DisplayName("spawns nothing for a null or empty list")
+        void nothingToInstall_spawnsNothing(@TempDir Path tempDir) throws Exception {
+            var service = serviceWithCli(tempDir);
+
+            assertThat(service.installAll(null, tempDir)).isEmpty();
+            assertThat(service.installAll(List.of(), tempDir)).isEmpty();
+            assertThat(service.invocations).isEmpty();
+        }
+
+        @Test
+        @DisplayName("notifies the progress callback before each install, not after")
+        void progressCallback_firesBeforeEachInstall(@TempDir Path tempDir) throws Exception {
+            var trace = new ArrayList<String>();
+            var cli = tempDir.resolve("claude");
+            Files.createFile(cli);
+            var service = new RecordingService(cli) {
+                @Override
+                protected ProcessResult runInstall(List<String> args, Path workingDir) throws IOException {
+                    trace.add("install");
+                    return super.runInstall(args, workingDir);
+                }
+            };
+
+            service.installAll(List.of("first@mkt", "second@mkt"), tempDir, name -> trace.add("before:" + name));
+
+            assertThat(trace)
+                .as("a caller rendering progress needs the notification while the subprocess runs")
+                .containsExactly("before:first@mkt", "install", "before:second@mkt", "install");
+        }
+    }
+
+    /**
+     * Drives the ADR-015 discovery ladder with the environment lookup, the {@code which} subprocess
+     * and the home directory all replaced, so the outcome depends on the ladder rather than on
+     * whether the machine running the suite has the Claude Code CLI installed.
+     */
+    private static class DiscoveringService extends ClaudePluginInstallService {
+        String envOverride;
+        String home;
+        ProcessResult whichResult = new ProcessResult(1, "");
+        int whichCalls;
+
+        @Override
+        protected String cliEnvOverride() {
+            return envOverride;
+        }
+
+        @Override
+        protected String homeDirectory() {
+            return home;
+        }
+
+        @Override
+        protected ProcessResult runDiscovery(List<String> args) {
+            whichCalls++;
+            return whichResult;
+        }
+    }
+
+    @Nested
+    @DisplayName("claudeCli() discovery ladder")
+    class Discovery {
+
+        @Test
+        @DisplayName("an explicit override wins and PATH is never consulted")
+        void envOverride_isUsedWithoutTouchingPath(@TempDir Path tempDir) throws Exception {
+            var pinned = Files.createFile(tempDir.resolve("pinned-claude"));
+            var service = new DiscoveringService();
+            service.envOverride = pinned.toString();
+
+            assertThat(service.claudeCli()).contains(pinned);
+            assertThat(service.whichCalls)
+                .as("a pinned binary must be used as-is — consulting PATH would make the pin advisory")
+                .isZero();
+        }
+
+        @Test
+        @DisplayName("an override that does not resolve yields empty and is NOT backfilled from PATH")
+        void envOverrideMissing_doesNotFallBackToPath(@TempDir Path tempDir) {
+            var onPath = tempDir.resolve("path-claude");
+            var service = new DiscoveringService();
+            service.envOverride = tempDir.resolve("nonexistent-claude").toString();
+            service.whichResult = new ProcessResult(0, onPath + "\n");
+
+            assertThat(service.claudeCli())
+                .as("a wrong pin must fail visibly instead of silently installing with another binary")
+                .isEmpty();
+            assertThat(service.whichCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("with no override, the binary found on PATH is used")
+        void noOverride_usesPathResult(@TempDir Path tempDir) throws Exception {
+            var onPath = Files.createFile(tempDir.resolve("path-claude"));
+            var service = new DiscoveringService();
+            service.whichResult = new ProcessResult(0, onPath + "\n");
+
+            assertThat(service.claudeCli()).contains(onPath);
+        }
+
+        @Test
+        @DisplayName("a PATH hit that is a directory rather than a file is rejected")
+        void pathResultThatIsADirectory_isRejected(@TempDir Path tempDir) {
+            var service = new DiscoveringService();
+            service.whichResult = new ProcessResult(0, tempDir + "\n");
+            service.home = tempDir.resolve("no-home").toString();
+
+            assertThat(service.claudeCli())
+                .as("spawning a directory as an executable fails at install time with a worse message")
+                .isEmpty();
+        }
+
+        @Test
+        @DisplayName("with nothing on PATH, the two fallback locations are tried in order")
+        void noPathResult_prefersLocalBinOverClaudeLocal(@TempDir Path homeDir) throws Exception {
+            var localBin = homeDir.resolve(".local/bin/claude");
+            var claudeLocal = homeDir.resolve(".claude/local/claude");
+            Files.createDirectories(localBin.getParent());
+            Files.createDirectories(claudeLocal.getParent());
+            Files.createFile(localBin);
+            Files.createFile(claudeLocal);
+
+            var service = new DiscoveringService();
+            service.home = homeDir.toString();
+
+            assertThat(service.claudeCli())
+                .as("~/.local/bin/claude is declared first, so it must win when both exist")
+                .contains(localBin);
+        }
+
+        @Test
+        @DisplayName("the second fallback location is used when the first is absent")
+        void noPathResult_fallsBackToClaudeLocal(@TempDir Path homeDir) throws Exception {
+            var claudeLocal = homeDir.resolve(".claude/local/claude");
+            Files.createDirectories(claudeLocal.getParent());
+            Files.createFile(claudeLocal);
+
+            var service = new DiscoveringService();
+            service.home = homeDir.toString();
+
+            assertThat(service.claudeCli()).contains(claudeLocal);
+        }
+
+        @Test
+        @DisplayName("no override, nothing on PATH and no fallback file yields empty")
+        void nothingAnywhere_yieldsEmpty(@TempDir Path homeDir) {
+            var service = new DiscoveringService();
+            service.home = homeDir.toString();
+
+            assertThat(service.claudeCli()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("discovery is memoized across calls")
+        void repeatedCalls_discoverOnce(@TempDir Path tempDir) throws Exception {
+            var onPath = Files.createFile(tempDir.resolve("path-claude"));
+            var service = new DiscoveringService();
+            service.whichResult = new ProcessResult(0, onPath + "\n");
+
+            service.claudeCli();
+            service.claudeCli();
+
+            assertThat(service.whichCalls)
+                .as("every install would otherwise pay for a `which` subprocess")
+                .isEqualTo(1);
+        }
+    }
+
+    @Nested
     @DisplayName("remediationCommand()")
     class RemediationCommand {
 

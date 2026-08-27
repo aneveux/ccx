@@ -17,11 +17,14 @@ jobs:
           fetch-depth: 0  # git-changelist-maven-extension needs the full commit count
       - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '25'
+          # Pinned exactly, and identically in ci.yml — see the comment there.
+          java-version: '25.0.2'
           distribution: 'graalvm-community'
           native-image-job-reports: 'true'
-      - name: Build native image
-        run: mvn -Pnative package -DskipTests -B -Dchangelist=
+      # `verify` runs CcxNativeIT against the freshly built binary, so a release never ships a native
+      # image that fails on its first real invocation.
+      - name: Build native image and run it
+        run: mvn -Pnative verify -B -Dchangelist=
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
         with:

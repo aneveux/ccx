@@ -1,13 +1,11 @@
 package me.neveux.ccx.tui;
 
-import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ConfigReadException;
 import me.neveux.ccx.service.ConfigWriteException;
-import me.neveux.ccx.service.ProfileApplyService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.ProfileLoadException;
 import me.neveux.ccx.service.ProfileNotFoundException;
-import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,19 +35,14 @@ public final class TuiActions {
     private final SettingsService settingsService;
     private final ClaudeMdService claudeMdService;
     private final TuiDataService tuiDataService;
-    private final ProfileApplyService profileApplyService;
-    private final CcxContextService ccxContextService;
-    private final ProfileService profileService;
+    private final ProfileLifecycleService profileLifecycleService;
 
     public TuiActions(SettingsService settingsService, ClaudeMdService claudeMdService,
-                      TuiDataService tuiDataService, ProfileApplyService profileApplyService,
-                      CcxContextService ccxContextService, ProfileService profileService) {
+                      TuiDataService tuiDataService, ProfileLifecycleService profileLifecycleService) {
         this.settingsService = settingsService;
         this.claudeMdService = claudeMdService;
         this.tuiDataService = tuiDataService;
-        this.profileApplyService = profileApplyService;
-        this.ccxContextService = ccxContextService;
-        this.profileService = profileService;
+        this.profileLifecycleService = profileLifecycleService;
     }
 
     public TuiSnapshot togglePlugin(String pluginName, Path projectDir) {
@@ -122,26 +115,7 @@ public final class TuiActions {
 
     public TuiSnapshot enableProfile(String name, Path projectDir) {
         try {
-            // Validate the leaf, then enable its whole extends closure (deps first, leaf last)
-            // so a dependent is never recorded enabled without its dependencies. Members already
-            // recorded enabled are skipped, matching `ccx profiles enable`: re-applying cannot
-            // repair an edited rule file (overwrite=false), so `r` (reinstall) is the repair path.
-            profileService.load(name);
-            for (var member : profileService.resolveDependencyClosure(name)) {
-                var context = ccxContextService.read(projectDir);
-                if (context.enabledProfiles().containsKey(member)) {
-                    log.debug("profile member already enabled, skipping member={} of={}", member, name);
-                    continue;
-                }
-                try {
-                    var profile = profileService.load(member);
-                    var snapshot = profileApplyService.apply(profile, projectDir, false, context);
-                    ccxContextService.recordEnabled(member, snapshot, projectDir);
-                } catch (ProfileNotFoundException missing) {
-                    log.warn("dependency missing on disk dependency={} of={}", member, name);
-                }
-            }
-            log.debug("profile enabled name={} projectDir={}", name, projectDir);
+            profileLifecycleService.enable(name, projectDir);
         } catch (ProfileNotFoundException e) {
             lastError = "Profile not found: " + name;
             log.warn("failed to enable profile — not found name={}", name, e);
@@ -157,13 +131,7 @@ public final class TuiActions {
 
     public TuiSnapshot disableProfile(String name, Path projectDir) {
         try {
-            var context = ccxContextService.read(projectDir);
-            var record = context.enabledProfiles().get(name);
-            if (record != null) {
-                profileApplyService.remove(record.snapshot(), projectDir, context, name);
-                ccxContextService.recordDisabled(name, projectDir);
-                log.debug("profile disabled name={} projectDir={}", name, projectDir);
-            }
+            profileLifecycleService.disable(name, projectDir);
         } catch (Exception e) {
             lastError = "Failed to disable profile: " + e.getMessage();
             log.warn("failed to disable profile name={}", name, e);
@@ -173,17 +141,7 @@ public final class TuiActions {
 
     public TuiSnapshot reinstallProfile(String name, Path projectDir) {
         try {
-            var context = ccxContextService.read(projectDir);
-            var record = context.enabledProfiles().get(name);
-            if (record != null) {
-                profileApplyService.remove(record.snapshot(), projectDir, context, name);
-                ccxContextService.recordDisabled(name, projectDir);
-            }
-            var resolved = profileService.loadAndResolve(name);
-            var snapshot = profileApplyService.apply(resolved, projectDir, true,
-                ccxContextService.read(projectDir));
-            ccxContextService.recordEnabled(name, snapshot, projectDir);
-            log.debug("profile reinstalled name={} projectDir={}", name, projectDir);
+            profileLifecycleService.reinstall(name, projectDir);
         } catch (ProfileNotFoundException e) {
             lastError = "Profile not found: " + name;
             log.warn("failed to reinstall profile — not found name={}", name, e);

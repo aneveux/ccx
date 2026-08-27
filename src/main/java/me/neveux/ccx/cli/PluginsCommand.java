@@ -87,8 +87,9 @@ public class PluginsCommand implements Runnable {
         var out = spec.commandLine().getOut();
         var err = spec.commandLine().getErr();
         var failures = 0;
-        for (var plugin : missing) {
-            var result = installService.install(plugin, dir);
+        for (var attempt : installService.installAll(missing, dir).entrySet()) {
+            var plugin = attempt.getKey();
+            var result = attempt.getValue();
             if (result.isSuccess()) {
                 out.println(CliFormat.OK + " Installed " + plugin);
             } else {
@@ -117,10 +118,13 @@ public class PluginsCommand implements Runnable {
      * ({@link CliFormat#ENABLED}), enabled globally ({@link CliFormat#GLOBAL}),
      * or available but not enabled ({@link CliFormat#AVAILABLE}). Supports
      * filtering by tag via {@code --tag}.
+     *
+     * <p>Returns 1 when a supplied path is rejected, so a caller can tell a rejection apart from
+     * a project with no plugins enabled; 0 otherwise.
      */
     @Command(name = "list", description = "List all known plugins with their enabled status")
     @RegisterForReflection
-    static class ListCommand implements Runnable {
+    static class ListCommand implements Callable<Integer> {
 
         @Inject
         SettingsService settingsService;
@@ -141,11 +145,11 @@ public class PluginsCommand implements Runnable {
         CommandLine.Model.CommandSpec spec;
 
         @Override
-        public void run() {
+        public Integer call() {
             var projDir = CommandUtil.resolveProjectDir(projectDir);
             var globDir = CommandUtil.resolveGlobalDir(globalDir);
-            if (!CommandUtil.checkPathSecurity(projDir, spec)) return;
-            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return;
+            if (!CommandUtil.checkPathSecurity(projDir, spec)) return 1;
+            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return 1;
 
             var projectSettings = settingsService.read(projDir);
             var globalSettings = settingsService.read(globDir);
@@ -174,6 +178,7 @@ public class PluginsCommand implements Runnable {
                 out.println(icon + " " + plugin);
             }
             out.flush();
+            return 0;
         }
 
     }
@@ -247,13 +252,15 @@ public class PluginsCommand implements Runnable {
         private void installIfMissing(String qualifiedName, Path dir) {
             if (claudePluginRegistryService.isInstalledFor(qualifiedName, dir)) return;
             var out = spec.commandLine().getOut();
-            var result = claudePluginInstallService.install(qualifiedName, dir);
-            if (result.isSuccess()) {
-                out.println("Installed: " + qualifiedName);
-                return;
-            }
-            spec.commandLine().getErr().println(
-                "Warning: could not install '" + qualifiedName + "': " + result.message());
+            claudePluginInstallService.installAll(List.of(qualifiedName), dir)
+                .forEach((plugin, result) -> {
+                    if (result.isSuccess()) {
+                        out.println("Installed: " + plugin);
+                        return;
+                    }
+                    spec.commandLine().getErr().println(
+                        "Warning: could not install '" + plugin + "': " + result.message());
+                });
         }
     }
 
@@ -368,10 +375,13 @@ public class PluginsCommand implements Runnable {
      * Compares the project and global plugin sets and prints them in three groups:
      * plugins present in both, project-only, and global-only. Useful for
      * identifying redundancy or gaps between scopes.
+     *
+     * <p>Returns 1 when a supplied path is rejected, so a caller can tell a rejection apart from
+     * two scopes that genuinely share nothing; 0 otherwise.
      */
     @Command(name = "diff", description = "Compare project plugins vs global plugins")
     @RegisterForReflection
-    static class DiffCommand implements Runnable {
+    static class DiffCommand implements Callable<Integer> {
 
         @Inject
         SettingsService settingsService;
@@ -386,11 +396,11 @@ public class PluginsCommand implements Runnable {
         CommandLine.Model.CommandSpec spec;
 
         @Override
-        public void run() {
+        public Integer call() {
             var projDir = CommandUtil.resolveProjectDir(projectDir);
             var globDir = CommandUtil.resolveGlobalDir(globalDir);
-            if (!CommandUtil.checkPathSecurity(projDir, spec)) return;
-            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return;
+            if (!CommandUtil.checkPathSecurity(projDir, spec)) return 1;
+            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return 1;
 
             var projectSettings = settingsService.read(projDir);
             var globalSettings = settingsService.read(globDir);
@@ -421,6 +431,7 @@ public class PluginsCommand implements Runnable {
                 out.println("Global-only:");
                 globalOnly.forEach(p -> out.println("  " + CliFormat.yellow("~ " + p)));
             }
+            return 0;
         }
 
     }
@@ -491,10 +502,13 @@ public class PluginsCommand implements Runnable {
      * Lists all tag identifiers derived from marketplace source keys and the
      * {@code @source} suffixes of qualified plugin names discovered in both
      * project and global settings.
+     *
+     * <p>Returns 1 when a supplied path is rejected, so a caller can tell a rejection apart from
+     * a configuration with no tags; 0 otherwise.
      */
     @Command(name = "tags", description = "List all available plugin tags")
     @RegisterForReflection
-    static class TagsCommand implements Runnable {
+    static class TagsCommand implements Callable<Integer> {
 
         @Inject
         SettingsService settingsService;
@@ -512,11 +526,11 @@ public class PluginsCommand implements Runnable {
         CommandLine.Model.CommandSpec spec;
 
         @Override
-        public void run() {
+        public Integer call() {
             var projDir = CommandUtil.resolveProjectDir(projectDir);
             var globDir = CommandUtil.resolveGlobalDir(globalDir);
-            if (!CommandUtil.checkPathSecurity(projDir, spec)) return;
-            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return;
+            if (!CommandUtil.checkPathSecurity(projDir, spec)) return 1;
+            if (!CommandUtil.checkPathSecurity(globDir, spec, "--global-dir")) return 1;
 
             var projectSettings = settingsService.read(projDir);
             var globalSettings = settingsService.read(globDir);
@@ -549,6 +563,7 @@ public class PluginsCommand implements Runnable {
             } else {
                 tags.forEach(out::println);
             }
+            return 0;
         }
     }
 }

@@ -1,6 +1,7 @@
 package me.neveux.ccx.cli;
 
 import me.neveux.ccx.service.CcxConfigService;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.SettingsService;
@@ -34,7 +35,7 @@ class ConfigCommandTest {
         var factory = new TestCommandFactory(
             settingsService, null, new PluginMapService(),
             new ClaudeMdService(),
-            new SkillsService(settingsService),
+            new SkillsService(settingsService, new ClaudeMarketplaceRegistryService()),
             null, null,
             new CcxConfigService(ccxConfigDir)
         );

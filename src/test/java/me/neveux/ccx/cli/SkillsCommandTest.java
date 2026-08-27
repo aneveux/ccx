@@ -3,6 +3,7 @@ package me.neveux.ccx.cli;
 
 import me.neveux.ccx.model.MarketplaceSource;
 import me.neveux.ccx.model.Settings;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
@@ -41,7 +42,7 @@ class SkillsCommandTest {
     @BeforeEach
     void setUp() {
         settingsService = new SettingsService();
-        skillsService = new SkillsService(settingsService);
+        skillsService = new SkillsService(settingsService, isolatedRegistry());
 
         var factory = new TestCommandFactory(
             settingsService, new ProfileService(), new PluginMapService(),
@@ -50,6 +51,16 @@ class SkillsCommandTest {
         commandLine = new CommandLine(new CcxCommand(), factory);
         commandLine.setOut(new PrintWriter(outputCapture, true));
         commandLine.setErr(new PrintWriter(outputCapture, true));
+    }
+
+    /** A registry pointed at an absent file, so skill discovery never sees the real {@code ~/.claude}. */
+    private ClaudeMarketplaceRegistryService isolatedRegistry() {
+        return new ClaudeMarketplaceRegistryService() {
+            @Override
+            protected Path registryFile() {
+                return globalDir.resolve("plugins/known_marketplaces.json");
+            }
+        };
     }
 
     private int run(String... args) {
@@ -459,7 +470,7 @@ class SkillsCommandTest {
         @DisplayName("exits 1 and prints the ConfigWriteException message when disk write fails")
         void disableCommand_diskFull_exits1WithMessage() {
             var failingSettings = new FailingSettingsService();
-            var failingSkillsService = new SkillsService(failingSettings);
+            var failingSkillsService = new SkillsService(failingSettings, new ClaudeMarketplaceRegistryService());
 
             var factory = new TestCommandFactory(
                 failingSettings, new ProfileService(), new PluginMapService(),

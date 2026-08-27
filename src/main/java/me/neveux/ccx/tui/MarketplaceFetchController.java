@@ -21,8 +21,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * state crosses the fetch thread / render thread boundary, so every field is
  * {@code volatile}. The status line is shared — both fetch completion and user
  * actions publish to it via {@link #setStatus}.
+ *
+ * <p>Not {@code final} so {@code CcxAppTest} can substitute a subclass that signals a pending
+ * refresh without running a real fetch.
  */
-final class MarketplaceFetchController {
+class MarketplaceFetchController {
 
     private static final Logger log = LoggerFactory.getLogger(MarketplaceFetchController.class);
 

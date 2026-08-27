@@ -6,7 +6,7 @@ import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudePluginInstallService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.util.FileUtils;
-import me.neveux.ccx.service.ProfileApplyService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.ProfileNotFoundException;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
@@ -204,13 +204,7 @@ public class ProfilesCommand implements Runnable {
     static class EnableCommand implements Callable<Integer> {
 
         @Inject
-        ProfileApplyService profileApplyService;
-
-        @Inject
-        CcxContextService ccxContextService;
-
-        @Inject
-        ProfileService profileService;
+        ProfileLifecycleService profileLifecycleService;
 
         @Inject
         SettingsService settingsService;
@@ -235,37 +229,17 @@ public class ProfilesCommand implements Runnable {
             var dir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
             try {
-                // Validate the leaf exists before touching anything.
-                profileService.load(name);
-                // Enable the whole extends closure (dependencies first, leaf last) so a
-                // dependent never sits enabled without its dependencies recorded. Members
-                // already recorded enabled are skipped rather than re-applied: re-applying
-                // cannot repair an edited rule file anyway (overwrite=false), so `reinstall`
-                // is the honest repair path.
-                var alreadyEnabled = new ArrayList<String>();
-                for (var member : profileService.resolveDependencyClosure(name)) {
-                    var context = ccxContextService.read(dir);
-                    if (context.enabledProfiles().containsKey(member)) {
-                        alreadyEnabled.add(member);
-                        continue;
-                    }
-                    try {
-                        var profile = profileService.load(member);
-                        var snapshot = profileApplyService.apply(profile, dir, false, context);
-                        ccxContextService.recordEnabled(member, snapshot, dir);
-                    } catch (ProfileNotFoundException missing) {
-                        spec.commandLine().getErr().println(
-                            "Warning: dependency '" + member + "' of '" + name + "' has no profile on disk — '" + name + "' will be marked broken.");
-                    }
+                var result = profileLifecycleService.enable(name, dir);
+                for (var missing : result.missingDependencies()) {
+                    spec.commandLine().getErr().println(
+                        "Warning: dependency '" + missing + "' of '" + name + "' has no profile on disk — '" + name + "' will be marked broken.");
                 }
                 var out = spec.commandLine().getOut();
-                var skippedDependencies = alreadyEnabled.stream()
-                    .filter(member -> !member.equals(name))
-                    .toList();
+                var skippedDependencies = result.alreadyEnabledDependencies(name);
                 if (!skippedDependencies.isEmpty()) {
                     out.println("Already enabled: " + String.join(", ", skippedDependencies));
                 }
-                if (alreadyEnabled.contains(name)) {
+                if (result.wasAlreadyEnabled(name)) {
                     out.println("Profile '" + name + "' is already enabled. Run `ccx profiles reinstall "
                         + name + "` to re-apply it.");
                 } else {
@@ -302,10 +276,7 @@ public class ProfilesCommand implements Runnable {
     static class DisableCommand implements Callable<Integer> {
 
         @Inject
-        ProfileApplyService profileApplyService;
-
-        @Inject
-        CcxContextService ccxContextService;
+        ProfileLifecycleService profileLifecycleService;
 
         @Parameters(index = "0", description = "Profile name")
         String name;
@@ -320,15 +291,11 @@ public class ProfilesCommand implements Runnable {
         public Integer call() {
             var dir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
-            var context = ccxContextService.read(dir);
-            var record = context.enabledProfiles().get(name);
-            if (record == null) {
-                spec.commandLine().getErr().println("Profile '" + name + "' is not enabled");
-                return 1;
-            }
-            profileApplyService.remove(record.snapshot(), dir, context, name);
             try {
-                ccxContextService.recordDisabled(name, dir);
+                if (!profileLifecycleService.disable(name, dir)) {
+                    spec.commandLine().getErr().println("Profile '" + name + "' is not enabled");
+                    return 1;
+                }
             } catch (IOException e) {
                 spec.commandLine().getErr().println("Failed to record profile state (context.json may be corrupted): " + e.getMessage());
                 return 1;
@@ -350,13 +317,7 @@ public class ProfilesCommand implements Runnable {
     static class ReinstallCommand implements Callable<Integer> {
 
         @Inject
-        ProfileApplyService profileApplyService;
-
-        @Inject
-        CcxContextService ccxContextService;
-
-        @Inject
-        ProfileService profileService;
+        ProfileLifecycleService profileLifecycleService;
 
         @Inject
         SettingsService settingsService;
@@ -380,22 +341,8 @@ public class ProfilesCommand implements Runnable {
         public Integer call() {
             var dir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
-            var context = ccxContextService.read(dir);
-            var record = context.enabledProfiles().get(name);
-            if (record != null) {
-                profileApplyService.remove(record.snapshot(), dir, context, name);
-                try {
-                    ccxContextService.recordDisabled(name, dir);
-                } catch (IOException e) {
-                    spec.commandLine().getErr().println("Failed to record profile state (context.json may be corrupted): " + e.getMessage());
-                    return 1;
-                }
-            }
             try {
-                var resolved = profileService.loadAndResolve(name);
-                var snapshot = profileApplyService.apply(resolved, dir, true,
-                    ccxContextService.read(dir));
-                ccxContextService.recordEnabled(name, snapshot, dir);
+                profileLifecycleService.reinstall(name, dir);
                 var out = spec.commandLine().getOut();
                 out.println("Reinstalled profile: " + name);
                 out.flush();

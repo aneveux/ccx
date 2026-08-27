@@ -3,12 +3,14 @@ package me.neveux.ccx.cli;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ClaudePluginInstallService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileApplyService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
 import me.neveux.ccx.service.SkillsService;
@@ -68,7 +70,7 @@ public class TestCommandFactory implements CommandLine.IFactory {
         this.profileService = profileService;
         this.pluginMapService = pluginMapService;
         this.claudeMdService = claudeMdService;
-        this.skillsService = new SkillsService(settingsService);
+        this.skillsService = new SkillsService(settingsService, new ClaudeMarketplaceRegistryService());
         this.profileApplyService = null;
         this.ccxContextService = null;
         this.ccxConfigService = null;
@@ -85,7 +87,7 @@ public class TestCommandFactory implements CommandLine.IFactory {
         this.profileService = profileService;
         this.pluginMapService = pluginMapService;
         this.claudeMdService = claudeMdService;
-        this.skillsService = new SkillsService(settingsService);
+        this.skillsService = new SkillsService(settingsService, new ClaudeMarketplaceRegistryService());
         this.profileApplyService = null;
         this.ccxContextService = null;
         this.ccxConfigService = null;
@@ -174,12 +176,22 @@ public class TestCommandFactory implements CommandLine.IFactory {
         injectIfPresent(instance, "skillsService", skillsService);
         injectIfPresent(instance, "profileApplyService", profileApplyService);
         injectIfPresent(instance, "ccxContextService", ccxContextService);
+        injectIfPresent(instance, "profileLifecycleService", profileLifecycleService());
         injectIfPresent(instance, "ccxConfigService", ccxConfigService);
         injectIfPresent(instance, "marketplaceCloneService", marketplaceCloneService);
         injectIfPresent(instance, "claudePluginRegistryService", claudePluginRegistryService);
         injectIfPresent(instance, "claudePluginInstallService", claudePluginInstallService);
         injectIfPresent(instance, "mapper", new ObjectMapper());
         return (K) instance;
+    }
+
+    /**
+     * The lifecycle service built from the three services it composes, or null when a test did not
+     * supply them — the same "absent means leave the field alone" contract the other services have.
+     */
+    private ProfileLifecycleService profileLifecycleService() {
+        if (profileService == null || profileApplyService == null || ccxContextService == null) return null;
+        return new ProfileLifecycleService(profileService, profileApplyService, ccxContextService);
     }
 
     private void injectIfPresent(Object target, String fieldName, Object value) {

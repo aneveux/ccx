@@ -138,7 +138,8 @@ public class ProfileApplyService {
         settingsService.write(s, projectRoot);
 
         var writtenRules = applyRules(projectRoot, overwrite, profileName);
-        var writtenFragments = applyFragments(projectRoot, profileName);
+        var writtenFragments = applyFragments(projectRoot, profileName,
+            resolved.claudeMd() != null ? resolved.claudeMd().fragments() : null);
         var writtenCommands = applyCommands(projectRoot, overwrite, profileName);
 
         var permissionsAllow = claimedPermissions(
@@ -240,35 +241,83 @@ public class ProfileApplyService {
         return writtenRules;
     }
 
-    private List<String> applyFragments(Path projectRoot, String profileName) {
+    private List<String> applyFragments(Path projectRoot, String profileName, List<String> declaredFragments) {
         var claudeMd = projectRoot.resolve(".claude/CLAUDE.md");
         var existingLines = new ArrayList<>(claudeMdService.readMarkerBlock(claudeMd));
         var writtenFragments = new ArrayList<String>();
-        if (profileName != null) {
-            var fragmentsDir = ccxConfigService.profileClaudeMdDir(profileName);
-            if (Files.isDirectory(fragmentsDir)) {
-                try (var fragStream = Files.list(fragmentsDir)) {
-                    fragStream
-                        .filter(p -> p.getFileName().toString().endsWith(".md"))
-                        .sorted()
-                        .forEach(fragPath -> {
-                            if (!isUnderConfigDir(fragPath)) {
-                                return;
-                            }
-                            var absPath = fragPath.toAbsolutePath().normalize().toString();
-                            var fragLine = "@" + absPath;
-                            if (!existingLines.contains(fragLine)) {
-                                existingLines.add(fragLine);
-                            }
-                            writtenFragments.add(absPath);
-                        });
-                } catch (IOException e) {
-                    log.warn("failed to scan fragments dir profile={}", profileName, e);
-                }
+        for (var fragPath : fragmentSources(profileName, declaredFragments)) {
+            var absPath = fragPath.toAbsolutePath().normalize().toString();
+            var fragLine = "@" + absPath;
+            if (!existingLines.contains(fragLine)) {
+                existingLines.add(fragLine);
             }
+            writtenFragments.add(absPath);
         }
         claudeMdService.writeMarkerBlock(claudeMd, existingLines);
         return writtenFragments;
+    }
+
+    /**
+     * The fragment files a profile contributes: exactly the ones its {@code claudeMd.fragments}
+     * lists, in declaration order, when it declares them — an empty list therefore contributes
+     * nothing. Only a profile with no {@code fragments} key falls back to every {@code *.md} in
+     * its {@code claudemd/} directory, sorted.
+     */
+    private List<Path> fragmentSources(String profileName, List<String> declaredFragments) {
+        if (profileName == null) {
+            return List.of();
+        }
+        if (declaredFragments == null) {
+            return globFragmentsDir(profileName);
+        }
+        var sources = new ArrayList<Path>();
+        for (var fragmentName : declaredFragments) {
+            var resolved = resolveDeclaredFragment(profileName, fragmentName);
+            if (resolved == null) {
+                log.warn("declared fragment not found — skipped profile={} fragment={}", profileName, fragmentName);
+                continue;
+            }
+            sources.add(resolved);
+        }
+        return sources;
+    }
+
+    /**
+     * Locates one declared fragment, trying the profile's own {@code claudemd/} directory before
+     * the shared {@code claudemd/} directory and accepting the name both with and without its
+     * {@code .md} suffix. Returns {@code null} when no candidate is a regular file inside the ccx
+     * config directory, which also rejects a name that tries to escape it.
+     */
+    private Path resolveDeclaredFragment(String profileName, String fragmentName) {
+        if (fragmentName == null || fragmentName.isBlank()) {
+            return null;
+        }
+        var suffixed = fragmentName.endsWith(".md") ? fragmentName : fragmentName + ".md";
+        for (var dir : List.of(ccxConfigService.profileClaudeMdDir(profileName), ccxConfigService.globalClaudeMdDir())) {
+            for (var candidate : List.of(dir.resolve(fragmentName), dir.resolve(suffixed))) {
+                if (Files.isRegularFile(candidate) && isUnderConfigDir(candidate)) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    private List<Path> globFragmentsDir(String profileName) {
+        var fragmentsDir = ccxConfigService.profileClaudeMdDir(profileName);
+        if (!Files.isDirectory(fragmentsDir)) {
+            return List.of();
+        }
+        try (var fragStream = Files.list(fragmentsDir)) {
+            return fragStream
+                .filter(p -> p.getFileName().toString().endsWith(".md"))
+                .filter(this::isUnderConfigDir)
+                .sorted()
+                .toList();
+        } catch (IOException e) {
+            log.warn("failed to scan fragments dir profile={}", profileName, e);
+            return List.of();
+        }
     }
 
     private List<String> applyCommands(Path projectRoot, boolean overwrite, String profileName) {

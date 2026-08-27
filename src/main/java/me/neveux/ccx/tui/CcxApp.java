@@ -23,14 +23,12 @@ import me.neveux.ccx.cli.CcxCommand;
 import me.neveux.ccx.model.ProfileDriftState;
 import me.neveux.ccx.tui.CatppuccinTheme;
 import me.neveux.ccx.tui.Quips;
-import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ClaudePluginInstallService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
-import me.neveux.ccx.service.ProfileApplyService;
-import me.neveux.ccx.service.ProfileService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.SettingsService;
 import me.neveux.ccx.tui.tabs.ClaudeMdTab;
 import me.neveux.ccx.tui.tabs.McpTab;
@@ -85,13 +83,13 @@ public final class CcxApp {
     private final ClaudeMdTab claudeMdTab = new ClaudeMdTab();
 
     public CcxApp(TuiDataService tuiDataService, SettingsService settingsService, ClaudeMdService claudeMdService,
-                  ProfileApplyService profileApplyService, CcxContextService ccxContextService, ProfileService profileService,
+                  ProfileLifecycleService profileLifecycleService,
                   MarketplaceCloneService marketplaceCloneService, PluginMapService pluginMapService,
                   Path projectDir) {
         this.tuiDataService = tuiDataService;
         this.projectDir = projectDir;
         this.tuiActions = new TuiActions(settingsService, claudeMdService, tuiDataService,
-            profileApplyService, ccxContextService, profileService);
+            profileLifecycleService);
         var snapshot = tuiDataService.snapshot(projectDir);
         this.state = new TuiState(snapshot);
         this.fetch = new MarketplaceFetchController(settingsService, marketplaceCloneService,
@@ -102,6 +100,26 @@ public final class CcxApp {
 
         fetch.start("marketplace-refresh", false);
         fetch.loadCacheInfo();
+    }
+
+    /**
+     * Test seam: takes the collaborators ready-made and starts no background work, so the event
+     * loop can be driven with synthetic key events against a canned snapshot.
+     *
+     * @param tuiDataService source of the snapshot rebuilt after every mutation
+     * @param tuiActions     the mutation handlers whose {@code consumeLastError} gates installs
+     * @param fetch          marketplace fetch controller, already-constructed and not started
+     * @param pluginInstall  install controller invoked when a mutation enables a plugin
+     * @param projectDir     project the app operates on
+     */
+    CcxApp(TuiDataService tuiDataService, TuiActions tuiActions, MarketplaceFetchController fetch,
+           PluginInstallController pluginInstall, Path projectDir) {
+        this.tuiDataService = tuiDataService;
+        this.tuiActions = tuiActions;
+        this.fetch = fetch;
+        this.pluginInstall = pluginInstall;
+        this.projectDir = projectDir;
+        this.state = new TuiState(tuiDataService.snapshot(projectDir));
     }
 
     public void run() throws Exception {
@@ -473,6 +491,7 @@ public final class CcxApp {
             {"← → Tab S-Tab", "navigate tabs"},
             {"1–5", "jump to tab"},
             {"↑ ↓", "navigate list"},
+            {"j k (Overview)", "scroll down · up"},
             {"/", "focus filter"},
             {"Esc", "clear filter · close help"},
             {"Enter", "toggle selected item"},

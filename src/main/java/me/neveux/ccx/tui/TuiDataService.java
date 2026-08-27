@@ -453,6 +453,7 @@ public class TuiDataService {
             .privateClaudeMdPath(privateClaudeMdPath)
             .fragmentNames(fragmentNames)
             .mcpServerNames(mcpServerNames)
+            .settingsValid(settingsValid)
             .build();
     }
 

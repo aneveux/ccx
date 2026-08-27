@@ -126,6 +126,12 @@ public final class OverviewTab {
     private record SubBlock(String title, String body) {}
 
     private String contextBody(TuiSnapshot.OverviewData ov, Path projectDir) {
+        // Every count below reads zero when settings.json will not parse. Saying so is the whole
+        // difference between "nothing is configured here" and "we could not read your configuration".
+        if (!ov.settingsValid()) {
+            return Glyphs.BROKEN + "  `.claude/settings.json` is unreadable — the counts below are not "
+                + "your configuration\nRun `ccx doctor` to see why; edits are refused until it parses.";
+        }
         if (ov.contextFilePath() == null) {
             return Glyphs.BROKEN + "  ccx not activated in this project\n" + Quips.EMPTY[0];
         }

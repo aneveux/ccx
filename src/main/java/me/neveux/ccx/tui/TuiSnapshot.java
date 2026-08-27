@@ -86,7 +86,8 @@ public record TuiSnapshot(
         int globalHookCount,
         String privateClaudeMdPath,
         List<String> fragmentNames,
-        List<String> mcpServerNames
+        List<String> mcpServerNames,
+        boolean settingsValid
     ) {
         public static OverviewData empty() {
             return new Builder().build();
@@ -109,6 +110,7 @@ public record TuiSnapshot(
             private String privateClaudeMdPath = null;
             private List<String> fragmentNames = List.of();
             private List<String> mcpServerNames = List.of();
+            private boolean settingsValid = true;
 
             public Builder enabledProfileNames(List<String> v) { this.enabledProfileNames = v; return this; }
             public Builder profileDriftStates(Map<String, ProfileDriftState> v) { this.profileDriftStates = v; return this; }
@@ -126,6 +128,7 @@ public record TuiSnapshot(
             public Builder privateClaudeMdPath(String v) { this.privateClaudeMdPath = v; return this; }
             public Builder fragmentNames(List<String> v) { this.fragmentNames = v; return this; }
             public Builder mcpServerNames(List<String> v) { this.mcpServerNames = v; return this; }
+            public Builder settingsValid(boolean v) { this.settingsValid = v; return this; }
 
             public OverviewData build() {
                 return new OverviewData(
@@ -133,7 +136,7 @@ public record TuiSnapshot(
                     mcpCount, hookCount,
                     projectPluginNames, globalPluginNames, rulesFileNames, contextFilePath,
                     projectClaudeMdPath, globalClaudeMdPath, globalHookCount,
-                    privateClaudeMdPath, fragmentNames, mcpServerNames
+                    privateClaudeMdPath, fragmentNames, mcpServerNames, settingsValid
                 );
             }
         }

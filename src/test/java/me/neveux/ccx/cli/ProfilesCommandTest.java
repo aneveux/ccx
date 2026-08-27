@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileApplyService;
@@ -83,7 +84,7 @@ class ProfilesCommandTest {
             buildProfileService(),
             new PluginMapService(),
             new ClaudeMdService(),
-            new SkillsService(settingsService),
+            new SkillsService(settingsService, new ClaudeMarketplaceRegistryService()),
             new ProfileApplyService(),
             new CcxContextService()
         );
@@ -247,7 +248,7 @@ class ProfilesCommandTest {
                 settingsService, profileService,
                 new me.neveux.ccx.service.PluginMapService(),
                 new me.neveux.ccx.service.ClaudeMdService(),
-                new me.neveux.ccx.service.SkillsService(settingsService),
+                new me.neveux.ccx.service.SkillsService(settingsService, new me.neveux.ccx.service.ClaudeMarketplaceRegistryService()),
                 null, null,
                 ccxConfig
             );
@@ -673,7 +674,7 @@ class ProfilesCommandTest {
         var factory = new TestCommandFactory(
             settingsService, buildProfileService(), new PluginMapService(),
             new ClaudeMdService(),
-            new SkillsService(settingsService),
+            new SkillsService(settingsService, new ClaudeMarketplaceRegistryService()),
             new ProfileApplyService(), new CcxContextService(),
             ccxConfig
         );

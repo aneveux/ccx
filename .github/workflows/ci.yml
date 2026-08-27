@@ -59,10 +59,15 @@ jobs:
           fetch-depth: 0  # git-changelist-maven-extension needs the full commit count
       - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '25'
+          # Pinned exactly, and identically in release.yml: an unpinned '25' silently follows the
+          # latest patch, so a native-image regression would land in CI (and in a release) on a day
+          # nothing in this repo changed.
+          java-version: '25.0.2'
           distribution: 'graalvm-community'
-      - name: Build native image (smoke test)
-        run: mvn -Pnative package -DskipTests -B -Dset.changelist -Dignore.dirt
+      # `verify`, not `package`: the native profile binds failsafe with native.image.path, so this is
+      # what actually executes the binary (CcxNativeIT) and catches a missing reflection entry.
+      - name: Build native image and run it (smoke test)
+        run: mvn -Pnative verify -B -Dset.changelist -Dignore.dirt
       - name: Upload native smoke artifact
         uses: actions/upload-artifact@v4
         with:

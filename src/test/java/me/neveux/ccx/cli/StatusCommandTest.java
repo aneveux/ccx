@@ -4,7 +4,7 @@ package me.neveux.ccx.cli;
 import me.neveux.ccx.model.McpServer;
 import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.ClaudeMdService;
-import me.neveux.ccx.service.PluginMapService;
+import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +36,8 @@ class StatusCommandTest {
         settingsService = new SettingsService();
 
         var factory = new TestCommandFactory(
-            settingsService, new ProfileService(), new PluginMapService(),
+            settingsService, new ProfileService(),
+            HomeIsolatedServices.pluginMapService(tempDir.resolve("no-registry.json")),
             new ClaudeMdService()
         );
         commandLine = new CommandLine(new CcxCommand(), factory);

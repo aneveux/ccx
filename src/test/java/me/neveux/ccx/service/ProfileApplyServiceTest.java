@@ -52,7 +52,8 @@ class ProfileApplyServiceTest {
         Files.writeString(javaProfileDir.resolve("rules/java.md"), "# Java rules\nDo Java things.\n");
         profileService = new ProfileService(yamlMapper, new CcxConfigService(ccxConfigDir));
         service = new ProfileApplyService(new SettingsService(), new ClaudeMdService(),
-            new PluginMapService(), new CcxConfigService(ccxConfigDir));
+            HomeIsolatedServices.pluginMapService(ccxConfigDir.resolve("no-registry.json")),
+            new CcxConfigService(ccxConfigDir));
         settingsService = new SettingsService();
     }
 
@@ -390,6 +391,142 @@ class ProfileApplyServiceTest {
             assertThat(settings.permissions().allow())
                 .as("settings.permissions.allow must contain Bash(mvn *) after apply")
                 .contains("Bash(mvn *)");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // claudeMd.fragments — declared list wins over the directory glob
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("apply() with a declared claudeMd.fragments list")
+    class DeclaredFragments {
+
+        private Path fragmentsDir;
+
+        @BeforeEach
+        void writeFragmentFiles() throws Exception {
+            fragmentsDir = ccxConfigDir.resolve("profiles/java/claudemd");
+            Files.createDirectories(fragmentsDir);
+            Files.writeString(fragmentsDir.resolve("java-intro.md"), "# Java intro\n");
+            Files.writeString(fragmentsDir.resolve("quarkus.md"), "# Quarkus\n");
+            Files.writeString(fragmentsDir.resolve("security.md"), "# Security\n");
+        }
+
+        private void declareFragments(String yamlList) throws Exception {
+            Files.writeString(ccxConfigDir.resolve("profiles/java/profile.yaml"),
+                "metadata:\n  name: java\n  description: Java/Maven projects\nclaudeMd:\n  fragments: "
+                    + yamlList + "\n");
+        }
+
+        private String fragmentLine(String fileName) {
+            return "@" + fragmentsDir.resolve(fileName).toAbsolutePath().normalize();
+        }
+
+        private List<String> markerBlock() {
+            return new ClaudeMdService().readMarkerBlock(tempDir.resolve(".claude/CLAUDE.md"));
+        }
+
+        @Test
+        @DisplayName("should inject only the declared fragments, not every *.md in the directory")
+        void apply_declaredFragments_injectsOnlyTheDeclaredOnes() throws Exception {
+            declareFragments("[java-intro]");
+
+            var snapshot = service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .as("a declared subset must not be widened back to the whole claudemd/ directory")
+                .containsExactly(fragmentLine("java-intro.md"));
+            assertThat(snapshot.fragments())
+                .as("the snapshot must record exactly what was written, or removal strands files")
+                .containsExactly(fragmentsDir.resolve("java-intro.md").toAbsolutePath().normalize().toString());
+        }
+
+        @Test
+        @DisplayName("should follow declaration order rather than filename order")
+        void apply_declaredFragments_followDeclarationOrder() throws Exception {
+            declareFragments("[security, java-intro]");
+
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .as("ordering control is the point of declaring the list explicitly")
+                .containsExactly(fragmentLine("security.md"), fragmentLine("java-intro.md"));
+        }
+
+        @Test
+        @DisplayName("should accept a declared name with its .md suffix")
+        void apply_declaredFragmentWithSuffix_isResolved() throws Exception {
+            declareFragments("[quarkus.md]");
+
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock()).containsExactly(fragmentLine("quarkus.md"));
+        }
+
+        @Test
+        @DisplayName("should skip a declared fragment that exists nowhere and still apply the others")
+        void apply_declaredFragmentMissing_isSkipped() throws Exception {
+            declareFragments("[java-intro, does-not-exist]");
+
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .as("a typo in one fragment name must not cost the user the other fragments")
+                .containsExactly(fragmentLine("java-intro.md"));
+        }
+
+        @Test
+        @DisplayName("should resolve a declared fragment from the global claudemd/ directory")
+        void apply_declaredFragment_resolvesFromGlobalDir() throws Exception {
+            var globalDir = ccxConfigDir.resolve("claudemd");
+            Files.createDirectories(globalDir);
+            Files.writeString(globalDir.resolve("company-style.md"), "# House style\n");
+            declareFragments("[company-style]");
+
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .containsExactly("@" + globalDir.resolve("company-style.md").toAbsolutePath().normalize());
+        }
+
+        @Test
+        @DisplayName("should inject nothing when the declared list is empty")
+        void apply_declaredEmptyList_injectsNothing() throws Exception {
+            declareFragments("[]");
+
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .as("an explicitly empty list is a decision to include no fragments")
+                .isEmpty();
+        }
+
+        @Test
+        @DisplayName("should not escape the config directory through an absolute fragment name")
+        void apply_declaredFragmentOutsideConfigDir_isSkipped() throws Exception {
+            var outside = tempDir.resolve("secret.md");
+            Files.writeString(outside, "SECRET\n");
+            declareFragments("[\"" + outside.toAbsolutePath() + "\"]");
+
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .as("a fragment name is a name inside the ccx config dir, never a path out of it")
+                .isEmpty();
+        }
+
+        @Test
+        @DisplayName("should fall back to the directory glob when no fragments key is declared")
+        void apply_noFragmentsKey_globsTheDirectory() throws Exception {
+            service.apply(profileService.loadAndResolve("java"), tempDir);
+
+            assertThat(markerBlock())
+                .as("a profile that declares nothing keeps the historical glob behaviour, sorted")
+                .containsExactly(
+                    fragmentLine("java-intro.md"),
+                    fragmentLine("quarkus.md"),
+                    fragmentLine("security.md"));
         }
     }
 

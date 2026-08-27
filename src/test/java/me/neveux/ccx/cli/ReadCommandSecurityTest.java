@@ -2,6 +2,7 @@
 package me.neveux.ccx.cli;
 
 import me.neveux.ccx.service.CcxConfigService;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
@@ -36,7 +37,7 @@ class ReadCommandSecurityTest {
         var settingsService = new SettingsService();
         var factory = new TestCommandFactory(
             settingsService, new ProfileService(), new PluginMapService(),
-            new ClaudeMdService(), new SkillsService(settingsService),
+            new ClaudeMdService(), new SkillsService(settingsService, new ClaudeMarketplaceRegistryService()),
             null, null, new CcxConfigService()
         );
         commandLine = new CommandLine(new CcxCommand(), factory);
@@ -54,6 +55,7 @@ class ReadCommandSecurityTest {
             Arguments.of("mcp show", new String[]{"mcp", "show", "some-server", "--project-dir", "/etc"}),
             Arguments.of("status", new String[]{"status", "--project-dir", "/etc"}),
             Arguments.of("skills list", new String[]{"skills", "list", "--project-dir", "/etc"}),
+            Arguments.of("skills show", new String[]{"skills", "show", "java:java", "--project-dir", "/etc"}),
             Arguments.of("doctor", new String[]{"doctor", "--project-dir", "/etc"})
         );
     }
@@ -64,10 +66,14 @@ class ReadCommandSecurityTest {
     void readCommand_rejectsProjectDirOutsideAllowedRoots(String label, String[] argv) {
         outputCapture.reset();
 
-        commandLine.execute(argv);
+        int exit = commandLine.execute(argv);
 
         assertThat(outputCapture.toString())
             .as("%s with --project-dir=/etc must report 'outside allowed'", label)
             .containsIgnoringCase("outside allowed");
+        assertThat(exit)
+            .as("%s must exit 1 on a rejected path, so a wrapper script cannot read the rejection "
+                + "as an empty-but-successful result", label)
+            .isEqualTo(1);
     }
 }

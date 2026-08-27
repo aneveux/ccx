@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import me.neveux.ccx.service.CcxConfigService;
+import me.neveux.ccx.service.ClaudeMarketplaceRegistryService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
@@ -50,7 +51,7 @@ class ClaudeMdCommandTest {
         var factory = new TestCommandFactory(
             settingsService, profileService, new PluginMapService(),
             new ClaudeMdService(),
-            new SkillsService(settingsService),
+            new SkillsService(settingsService, new ClaudeMarketplaceRegistryService()),
             null, null,
             new CcxConfigService(ccxConfigDir)
         );

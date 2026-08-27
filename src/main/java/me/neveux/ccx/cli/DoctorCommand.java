@@ -32,7 +32,11 @@ import java.util.stream.Collectors;
  * parse validity, CLAUDE.md fragment paths, enabled plugin marketplace
  * membership, MCP server declarations, required tools on PATH, global settings
  * parse validity, ccx config directory presence, and profile dependency
- * completeness. Exits with code 1 if any ERROR or WARNING is found.
+ * completeness.
+ *
+ * <p>Exits with code 1 if any ERROR is found, or if {@code git} is missing from PATH; every other
+ * WARNING and INFO is advisory and leaves the exit code at 0. In particular a plugin that resolves
+ * against no configured marketplace stays a non-failing WARNING (see ADR-015).
  */
 @Command(name = "doctor", description = "Validate project configuration")
 @Dependent

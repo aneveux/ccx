@@ -28,8 +28,11 @@ import java.util.function.BiConsumer;
  *
  * <p>State crosses the install thread / render thread boundary, so every mutable field is
  * {@code volatile}.
+ *
+ * <p>Not {@code final} so {@code CcxAppTest} can substitute a recording subclass and assert which
+ * key presses reach an install without spawning a subprocess.
  */
-final class PluginInstallController {
+class PluginInstallController {
 
     private static final Logger log = LoggerFactory.getLogger(PluginInstallController.class);
 
@@ -117,21 +120,23 @@ final class PluginInstallController {
     }
 
     private void installAll(List<String> qualifiedNames) {
-        if (qualifiedNames.isEmpty()) {
+        var missing = qualifiedNames.stream()
+            .filter(name -> !claudePluginRegistryService.isInstalledFor(name, projectDir))
+            .toList();
+        if (missing.isEmpty()) {
             log.debug("no plugin install needed projectDir={}", projectDir);
             return;
         }
-        for (var qualifiedName : qualifiedNames) {
-            if (claudePluginRegistryService.isInstalledFor(qualifiedName, projectDir)) continue;
-            statusSink.accept(Glyphs.INFO + " installing " + qualifiedName + "…", STATUS_SECONDS);
-            var result = claudePluginInstallService.install(qualifiedName, projectDir);
+        var results = claudePluginInstallService.installAll(missing, projectDir,
+            name -> statusSink.accept(Glyphs.INFO + " installing " + name + "…", STATUS_SECONDS));
+        results.forEach((qualifiedName, result) -> {
             if (result.isSuccess()) {
                 statusSink.accept(Glyphs.OK + " installed " + qualifiedName, STATUS_SECONDS);
             } else {
                 statusSink.accept(Glyphs.WARNING + " " + qualifiedName + ": " + footerSafe(result.message()),
                     STATUS_SECONDS);
             }
-        }
+        });
         refreshPending = true;
     }
 

@@ -1,11 +1,9 @@
 package me.neveux.ccx.cli;
 
-import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
-import me.neveux.ccx.service.ProfileApplyService;
-import me.neveux.ccx.service.ProfileService;
+import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.SettingsService;
 import me.neveux.ccx.tui.CcxApp;
 import me.neveux.ccx.tui.TuiDataService;
@@ -38,9 +36,7 @@ public class TuiCommand implements Callable<Integer> {
     private final TuiDataService tuiDataService;
     private final SettingsService settingsService;
     private final ClaudeMdService claudeMdService;
-    private final ProfileApplyService profileApplyService;
-    private final CcxContextService ccxContextService;
-    private final ProfileService profileService;
+    private final ProfileLifecycleService profileLifecycleService;
     private final MarketplaceCloneService marketplaceCloneService;
     private final PluginMapService pluginMapService;
 
@@ -52,15 +48,12 @@ public class TuiCommand implements Callable<Integer> {
 
     @Inject
     public TuiCommand(TuiDataService tuiDataService, SettingsService settingsService,
-                      ClaudeMdService claudeMdService, ProfileApplyService profileApplyService,
-                      CcxContextService ccxContextService, ProfileService profileService,
+                      ClaudeMdService claudeMdService, ProfileLifecycleService profileLifecycleService,
                       MarketplaceCloneService marketplaceCloneService, PluginMapService pluginMapService) {
         this.tuiDataService = tuiDataService;
         this.settingsService = settingsService;
         this.claudeMdService = claudeMdService;
-        this.profileApplyService = profileApplyService;
-        this.ccxContextService = ccxContextService;
-        this.profileService = profileService;
+        this.profileLifecycleService = profileLifecycleService;
         this.marketplaceCloneService = marketplaceCloneService;
         this.pluginMapService = pluginMapService;
     }
@@ -69,9 +62,7 @@ public class TuiCommand implements Callable<Integer> {
         this.tuiDataService = null;
         this.settingsService = null;
         this.claudeMdService = null;
-        this.profileApplyService = null;
-        this.ccxContextService = null;
-        this.profileService = null;
+        this.profileLifecycleService = null;
         this.marketplaceCloneService = null;
         this.pluginMapService = null;
     }
@@ -79,7 +70,7 @@ public class TuiCommand implements Callable<Integer> {
     @Override
     public Integer call() throws Exception {
         if (tuiDataService == null || settingsService == null || claudeMdService == null
-                || profileApplyService == null || ccxContextService == null || profileService == null
+                || profileLifecycleService == null
                 || marketplaceCloneService == null || pluginMapService == null) {
             spec.commandLine().getErr().println("Error: TUI services unavailable (CDI injection failed)");
             return 1;
@@ -93,8 +84,7 @@ public class TuiCommand implements Callable<Integer> {
 
         log.info("Starting TUI projectDir={}", projectDir);
         var app = new CcxApp(tuiDataService, settingsService, claudeMdService,
-            profileApplyService, ccxContextService, profileService,
-            marketplaceCloneService, pluginMapService, resolved);
+            profileLifecycleService, marketplaceCloneService, pluginMapService, resolved);
         app.run();
         return 0;
     }

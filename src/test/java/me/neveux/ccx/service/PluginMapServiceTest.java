@@ -37,12 +37,7 @@ class PluginMapServiceTest {
      * {@code ~/.claude/plugins/known_marketplaces.json} never leaks into assertions.
      */
     private static ClaudeMarketplaceRegistryService registryServiceWithout(Path missingFile) {
-        return new ClaudeMarketplaceRegistryService() {
-            @Override
-            protected Path registryFile() {
-                return missingFile;
-            }
-        };
+        return HomeIsolatedServices.registryServiceWithout(missingFile);
     }
 
     // -----------------------------------------------------------------------

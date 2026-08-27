@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
@@ -143,9 +144,25 @@ public class ClaudePluginInstallService {
      * @return outcomes in attempt order; empty when there was nothing to install
      */
     public Map<String, InstallResult> installAll(List<String> qualifiedNames, Path projectRoot) {
+        return installAll(qualifiedNames, projectRoot, name -> {});
+    }
+
+    /**
+     * Same as {@link #installAll(List, Path)}, notifying {@code beforeEach} with the plugin
+     * identifier just before each attempt starts. Every install is a CLI subprocess that can take
+     * seconds, so a caller rendering progress needs the notification before the call, not after.
+     *
+     * @param qualifiedNames plugin identifiers to install; may be null or empty
+     * @param projectRoot    project the plugins are being enabled in
+     * @param beforeEach     called with each identifier before its install is attempted
+     * @return outcomes in attempt order; empty when there was nothing to install
+     */
+    public Map<String, InstallResult> installAll(List<String> qualifiedNames, Path projectRoot,
+                                                 Consumer<String> beforeEach) {
         if (qualifiedNames == null || qualifiedNames.isEmpty()) return Map.of();
         var results = new LinkedHashMap<String, InstallResult>();
         for (var qualifiedName : qualifiedNames) {
+            beforeEach.accept(qualifiedName);
             results.put(qualifiedName, install(qualifiedName, projectRoot));
         }
         return results;
@@ -201,15 +218,47 @@ public class ClaudePluginInstallService {
         return reason + " — run `" + remediationCommand(qualifiedName) + "` in the project to see the full error";
     }
 
+    /**
+     * Returns the raw {@value #CLI_ENV_OVERRIDE} value. Overridable so tests can drive the
+     * discovery ladder without mutating the process environment.
+     *
+     * @return the pinned CLI location, or null when unset
+     */
+    protected String cliEnvOverride() {
+        return System.getenv(CLI_ENV_OVERRIDE);
+    }
+
+    /**
+     * Returns the home directory the fallback locations are resolved against. Overridable so tests
+     * can point it at a temp directory.
+     *
+     * @return the home directory path, or null when the JVM reports none
+     */
+    protected String homeDirectory() {
+        return System.getProperty("user.home");
+    }
+
+    /**
+     * Runs the {@code which claude} lookup. Overridable so tests can exercise the ladder without
+     * depending on whether the machine running them has the CLI installed.
+     *
+     * @param args full argv, executable first
+     * @return the exit status and combined output
+     * @throws IOException if the process cannot be started, times out, or is interrupted
+     */
+    protected ProcessResult runDiscovery(List<String> args) throws IOException {
+        return ProcessRunner.run(args, null, null, DISCOVERY_TIMEOUT_SECONDS);
+    }
+
     private Optional<Path> discoverCli() {
-        var override = System.getenv(CLI_ENV_OVERRIDE);
+        var override = cliEnvOverride();
         if (override != null && !override.isBlank()) {
             return executableAt(override);
         }
         var onPath = cliOnPath();
         if (onPath.isPresent()) return onPath;
 
-        var home = System.getProperty("user.home");
+        var home = homeDirectory();
         if (home == null) return Optional.empty();
         return FALLBACK_CLI_PATHS.stream()
             .map(segments -> Path.of(home, segments.toArray(String[]::new)))
@@ -219,7 +268,7 @@ public class ClaudePluginInstallService {
 
     private Optional<Path> cliOnPath() {
         try {
-            var result = ProcessRunner.run(List.of("which", "claude"), null, null, DISCOVERY_TIMEOUT_SECONDS);
+            var result = runDiscovery(List.of("which", "claude"));
             if (!result.isSuccess()) return Optional.empty();
             return result.output().lines()
                 .map(String::strip)

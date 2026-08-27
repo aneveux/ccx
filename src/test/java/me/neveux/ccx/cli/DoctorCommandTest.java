@@ -11,6 +11,7 @@ import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;
+import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
@@ -46,12 +47,21 @@ class DoctorCommandTest {
     private SettingsService settingsService;
     private CommandLine commandLine;
 
+    /**
+     * Plugin verification must depend only on the marketplaces a test declares: the bare no-arg
+     * {@code PluginMapService} reads the developer's real registry, so a marketplace installed on
+     * the machine running the suite would decide the verdicts.
+     */
+    private PluginMapService isolatedPluginMapService() {
+        return HomeIsolatedServices.pluginMapService(isolatedGlobalDir.resolve("no-registry.json"));
+    }
+
     @BeforeEach
     void setUp() {
         settingsService = new SettingsService();
 
         var factory = new TestCommandFactory(
-            settingsService, new ProfileService(), new PluginMapService(),
+            settingsService, new ProfileService(), isolatedPluginMapService(),
             new ClaudeMdService()
         );
         commandLine = new CommandLine(new CcxCommand(), factory);
@@ -361,8 +371,8 @@ class DoctorCommandTest {
 
             var factory = new TestCommandFactory(
                 settingsService, new me.neveux.ccx.service.ProfileService(),
-                new PluginMapService(), new ClaudeMdService(),
-                new me.neveux.ccx.service.SkillsService(settingsService),
+                isolatedPluginMapService(), new ClaudeMdService(),
+                new me.neveux.ccx.service.SkillsService(settingsService, new me.neveux.ccx.service.ClaudeMarketplaceRegistryService()),
                 null, null,
                 new me.neveux.ccx.service.CcxConfigService(ccxConfigDir)
             );
@@ -384,8 +394,8 @@ class DoctorCommandTest {
             var absentDir = tempDir.resolve("absent-ccx-config");
             var factory = new TestCommandFactory(
                 settingsService, new me.neveux.ccx.service.ProfileService(),
-                new PluginMapService(), new ClaudeMdService(),
-                new me.neveux.ccx.service.SkillsService(settingsService),
+                isolatedPluginMapService(), new ClaudeMdService(),
+                new me.neveux.ccx.service.SkillsService(settingsService, new me.neveux.ccx.service.ClaudeMarketplaceRegistryService()),
                 null, null,
                 new me.neveux.ccx.service.CcxConfigService(absentDir)
             );
@@ -456,8 +466,8 @@ class DoctorCommandTest {
             yamlMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
             var profileService = new ProfileService(yamlMapper, new CcxConfigService(ccxConfigDir));
             var factory = new TestCommandFactory(
-                settingsService, profileService, new PluginMapService(), new ClaudeMdService(),
-                new me.neveux.ccx.service.SkillsService(settingsService),
+                settingsService, profileService, isolatedPluginMapService(), new ClaudeMdService(),
+                new me.neveux.ccx.service.SkillsService(settingsService, new me.neveux.ccx.service.ClaudeMarketplaceRegistryService()),
                 null, new CcxContextService(),
                 new CcxConfigService(ccxConfigDir));
             var cl = new CommandLine(new CcxCommand(), factory);
@@ -491,7 +501,7 @@ class DoctorCommandTest {
                 }
             };
             var factory = new TestCommandFactory(
-                settingsService, new ProfileService(), new PluginMapService(), new ClaudeMdService())
+                settingsService, new ProfileService(), isolatedPluginMapService(), new ClaudeMdService())
                 .withClaudePluginRegistryService(registryService);
             var cl = new CommandLine(new CcxCommand(), factory);
             var out = new ByteArrayOutputStream();

@@ -28,10 +28,18 @@ class SkillsServiceTest {
     @TempDir
     Path tempDir;
 
+    private Path registryFile;
+
     @BeforeEach
     void setUp() {
         settingsService = new SettingsService();
-        service = new SkillsService(settingsService);
+        registryFile = tempDir.resolve("known_marketplaces.json");
+        service = new SkillsService(settingsService, new ClaudeMarketplaceRegistryService() {
+            @Override
+            protected Path registryFile() {
+                return registryFile;
+            }
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -51,7 +59,7 @@ class SkillsServiceTest {
 
             var settings = settingsWithMarketplace(marketplaceDir);
 
-            var results = service.discoverSkills(settings);
+            var results = service.discoverSkills(settings, new Settings());
 
             assertThat(results)
                 .as("one SKILL.md on disk must yield exactly one SkillEntry")
@@ -83,7 +91,7 @@ class SkillsServiceTest {
 
             var settings = settingsWithMarketplace(marketplaceDir);
 
-            var results = service.discoverSkills(settings);
+            var results = service.discoverSkills(settings, new Settings());
 
             assertThat(results)
                 .as("skill directory without SKILL.md must be ignored")
@@ -96,7 +104,7 @@ class SkillsServiceTest {
             var settings = new Settings()
                 .withExtraKnownMarketplaces(null);
 
-            var results = service.discoverSkills(settings);
+            var results = service.discoverSkills(settings, new Settings());
 
             assertThat(results)
                 .as("null extraKnownMarketplaces must yield empty result")
@@ -122,7 +130,7 @@ class SkillsServiceTest {
             var source = new MarketplaceSource("escape", link.toString(), null, null);
             var settings = new Settings().withExtraKnownMarketplaces(List.of(source));
 
-            assertThat(service.discoverSkills(settings))
+            assertThat(service.discoverSkills(settings, new Settings()))
                 .as("a marketplace source whose real path escapes the allowed roots must yield no skills")
                 .isEmpty();
         }
@@ -148,7 +156,7 @@ class SkillsServiceTest {
             var source = new MarketplaceSource("good", link.toString(), null, null);
             var settings = new Settings().withExtraKnownMarketplaces(List.of(source));
 
-            assertThat(service.discoverSkills(settings))
+            assertThat(service.discoverSkills(settings, new Settings()))
                 .as("a symlinked-but-allowed marketplace must still yield its skill — proving the negative test is not vacuous")
                 .extracting(SkillsService.SkillEntry::skillId)
                 .containsExactly("java:java");
@@ -169,7 +177,7 @@ class SkillsServiceTest {
             // PluginMapService resolves github sources via localCacheDir(key) and never
             // calls Path.of(source.path) directly. SkillsService must do the same — a null
             // path on a github source must not blow up with NullPointerException.
-            assertThat(service.discoverSkills(settings))
+            assertThat(service.discoverSkills(settings, new Settings()))
                 .as("github source with null path must be skipped, not crash with NPE")
                 .isNotNull()
                 .isEmpty();
@@ -189,12 +197,47 @@ class SkillsServiceTest {
             var settings = new Settings()
                 .withExtraKnownMarketplaces(List.of(githubSource, dirSource));
 
-            var results = service.discoverSkills(settings);
+            var results = service.discoverSkills(settings, new Settings());
 
             assertThat(results)
                 .as("null-path github source must be skipped; the valid directory source must still yield its skill")
                 .extracting(SkillsService.SkillEntry::skillId)
                 .containsExactly("java:java");
+        }
+
+        @Test
+        @DisplayName("should scan a github marketplace that Claude Code has already cloned locally")
+        void discoverSkills_resolvesGithubSourceThroughClaudeCodeRegistry() throws Exception {
+            var clonedDir = tempDir.resolve("claude-clone");
+            Files.createDirectories(clonedDir.resolve("java/skills/java"));
+            Files.createFile(clonedDir.resolve("java/skills/java/SKILL.md"));
+            Files.writeString(registryFile,
+                "{\"remote-mkt\":{\"installLocation\":\"" + clonedDir.toAbsolutePath() + "\"}}");
+
+            var settings = new Settings()
+                .withExtraKnownMarketplaces(List.of(new MarketplaceSource("remote-mkt", null, "github", "owner/repo")));
+
+            assertThat(service.discoverSkills(settings, new Settings()))
+                .as("a github marketplace Claude Code has cloned is local — its skills must be visible")
+                .extracting(SkillsService.SkillEntry::skillId)
+                .containsExactly("java:java");
+        }
+
+        @Test
+        @DisplayName("should scan marketplaces declared only in the global settings")
+        void discoverSkills_includesGloballyDeclaredMarketplaces() throws Exception {
+            var globalMarketplace = tempDir.resolve("global-marketplace");
+            Files.createDirectories(globalMarketplace.resolve("git/skills/rebase"));
+            Files.createFile(globalMarketplace.resolve("git/skills/rebase/SKILL.md"));
+
+            var global = new Settings()
+                .withExtraKnownMarketplaces(List.of(
+                    new MarketplaceSource("global-mkt", globalMarketplace.toString(), null, null)));
+
+            assertThat(service.discoverSkills(new Settings(), global))
+                .as("skills list must see the same marketplaces plugins list does, both scopes included")
+                .extracting(SkillsService.SkillEntry::skillId)
+                .containsExactly("git:rebase");
         }
 
         @Test
@@ -214,7 +257,7 @@ class SkillsServiceTest {
 
             var settings = settingsWithMarketplace(marketplaceDir);
 
-            var results = service.discoverSkills(settings);
+            var results = service.discoverSkills(settings, new Settings());
 
             assertThat(results)
                 .as("2 plugins with 2 skills each must yield 4 entries")

@@ -14,6 +14,7 @@ import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
@@ -58,8 +59,17 @@ class TuiDataServiceTest {
         yamlMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
         var profileService = new ProfileService(yamlMapper, new CcxConfigService(ccxConfigDir));
         service = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-            new CcxContextService(), profileService, new PluginMapService(),
+            new CcxContextService(), profileService, isolatedPluginMapService(),
             new CcxConfigService(ccxConfigDir));
+    }
+
+    /**
+     * A plugin map service that cannot see the developer's real {@code known_marketplaces.json}:
+     * with the bare no-arg constructor, a marketplace installed on the machine running the suite
+     * changes how a plugin short name resolves and flips assertions here.
+     */
+    private PluginMapService isolatedPluginMapService() {
+        return HomeIsolatedServices.pluginMapService(globalRoot.resolve("no-registry.json"));
     }
 
     private void writeSettings(Settings settings) {
@@ -103,7 +113,7 @@ class TuiDataServiceTest {
         @Test
         @DisplayName("should return empty mcps list")
         void snapshot_emptyDir_returnsEmptyMcps() {
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.mcps())
                 .as("mcps must be empty when no settings exist")
@@ -233,7 +243,7 @@ class TuiDataServiceTest {
                 <!-- ccx:end -->
                 """);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.claudeMdEntries())
                 .as("claudeMdEntries must contain a MISSING entry for the absent stack ref")
@@ -259,7 +269,7 @@ class TuiDataServiceTest {
             var settings = new Settings().withMcpServers(Map.of("my-server", server));
             writeSettings(settings);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.mcps())
                 .as("mcps must contain the configured server")
@@ -282,7 +292,7 @@ class TuiDataServiceTest {
             var settings = new Settings().withMcpServers(Map.of("local", server));
             writeSettings(settings);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.mcps())
                 .as("a stdio server is enabled by its presence in settings.json, like any other")
@@ -301,17 +311,41 @@ class TuiDataServiceTest {
 
 
         @Test
-        @DisplayName("should still return a non-null snapshot when settings.json is malformed")
-        void snapshot_withMalformedSettingsJson_doesNotThrow() throws Exception {
+        @DisplayName("should report the settings file as invalid rather than as an empty configuration")
+        void snapshot_withMalformedSettingsJson_reportsSettingsInvalid() throws Exception {
             var claudeDir = projectDir.resolve(".claude");
             Files.createDirectories(claudeDir);
             Files.writeString(claudeDir.resolve("settings.json"), "{ this is not valid json }}}");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
-            assertThat(snapshot)
-                .as("snapshot must not be null even when settings.json is malformed")
-                .isNotNull();
+            assertThat(snapshot.overview().settingsValid())
+                .as("an unparseable settings.json must be visible in the snapshot — otherwise the "
+                    + "Overview renders zero plugins/MCPs/hooks and reads as 'nothing configured here'")
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("should report the settings file as valid when it parses")
+        void snapshot_withValidSettingsJson_reportsSettingsValid() {
+            writeSettings(new Settings().withEnabledPlugins(Map.of("java@market", true)));
+
+            var snapshot = service.snapshot(projectDir, globalRoot);
+
+            assertThat(snapshot.overview().settingsValid())
+                .as("settingsValid must distinguish a readable file from an unreadable one, so the "
+                    + "flag cannot be pinned to a constant")
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("should report the settings file as valid when it is simply absent")
+        void snapshot_withNoSettingsJson_reportsSettingsValid() {
+            var snapshot = service.snapshot(projectDir, globalRoot);
+
+            assertThat(snapshot.overview().settingsValid())
+                .as("an absent settings.json is an unconfigured project, not a broken one")
+                .isTrue();
         }
     }
 
@@ -455,7 +489,7 @@ class TuiDataServiceTest {
 
             // Use full 8-arg constructor so PluginMapService and CcxConfigService are wired in
             var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxContextService(), new ProfileService(), isolatedPluginMapService(),
                 new CcxConfigService(ccxConfigDir));
 
             // Act
@@ -502,7 +536,7 @@ class TuiDataServiceTest {
             settingsService.write(settings, projectDir);
 
             var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxContextService(), new ProfileService(), isolatedPluginMapService(),
                 new CcxConfigService(ccxConfigDir));
             var snap = svc.snapshot(projectDir, globalRoot);
 
@@ -532,7 +566,7 @@ class TuiDataServiceTest {
                 .withExtraKnownMarketplaces(List.of(src)), projectDir);
 
             var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxContextService(), new ProfileService(), isolatedPluginMapService(),
                 new CcxConfigService(ccxConfigDir));
             var snap = svc.snapshot(projectDir, globalRoot);
 
@@ -558,7 +592,7 @@ class TuiDataServiceTest {
                 .withExtraKnownMarketplaces(List.of(src)), projectDir);
 
             var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxContextService(), new ProfileService(), isolatedPluginMapService(),
                 new CcxConfigService(ccxConfigDir));
             var snap = svc.snapshot(projectDir, globalRoot);
 
@@ -578,7 +612,7 @@ class TuiDataServiceTest {
                 .withExtraKnownMarketplaces(List.of(src)), projectDir);
 
             var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxContextService(), new ProfileService(), isolatedPluginMapService(),
                 new CcxConfigService(ccxConfigDir));
             var snap = svc.snapshot(projectDir, globalRoot);
 
@@ -630,7 +664,7 @@ class TuiDataServiceTest {
         @Test
         @DisplayName("should return non-empty profiles list with built-in profiles")
         void buildsProfilesList_withBuiltInProfiles() {
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("profiles list must not be empty — built-in profiles should always be present")
@@ -644,7 +678,7 @@ class TuiDataServiceTest {
         @Test
         @DisplayName("should populate description for java profile")
         void profileEntry_hasDescription() {
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             var javaProfile = snapshot.profiles().stream()
                 .filter(p -> "java".equals(p.name()))
@@ -661,7 +695,7 @@ class TuiDataServiceTest {
         @Test
         @DisplayName("all built-in profiles have non-null driftState")
         void profileEntry_hasNonNullDriftState() {
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("every built-in profile must have a non-null driftState")
@@ -671,7 +705,7 @@ class TuiDataServiceTest {
         @Test
         @DisplayName("all built-in profiles have non-null previewMarkdown")
         void profileEntry_hasNonNullPreviewMarkdown() {
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("every built-in profile must have a non-null previewMarkdown")
@@ -699,7 +733,7 @@ class TuiDataServiceTest {
         @DisplayName("profileEntry driftState is DISABLED when no context.json exists")
         void profileEntry_disabledWhenNotInContextJson() {
             // No context.json written — all profiles should be DISABLED
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("all built-in profiles must be DISABLED when no context.json exists")
@@ -717,7 +751,7 @@ class TuiDataServiceTest {
             // (empty plugin list means no drift from plugin checks)
             writeContextWithProfile("java", List.of());
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             var javaProfile = snapshot.profiles().stream()
                 .filter(p -> "java".equals(p.name()))
@@ -737,7 +771,7 @@ class TuiDataServiceTest {
             // Record java profile with a plugin that is NOT in settings.json
             writeContextWithProfile("java", List.of("missing-plugin@some-stack"));
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             var javaProfile = snapshot.profiles().stream()
                 .filter(p -> "java".equals(p.name()))
@@ -770,7 +804,7 @@ class TuiDataServiceTest {
             var absPath = fragDir.resolve("java.md").toAbsolutePath().normalize().toString();
             writeClaudeMd("<!-- ccx:begin -->\n@" + absPath + "\n<!-- ccx:end -->\n");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.claudeMdEntries())
                 .as("stack entry pointing to existing absolute path must have source PROJECT")
@@ -789,7 +823,7 @@ class TuiDataServiceTest {
                 <!-- ccx:end -->
                 """);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.claudeMdEntries())
                 .as("stack entry pointing to a missing file must have source MISSING")
@@ -808,7 +842,7 @@ class TuiDataServiceTest {
                 <!-- ccx:end -->
                 """);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.claudeMdEntries())
                 .as("stack entry must expose an extracted name")
@@ -909,7 +943,7 @@ class TuiDataServiceTest {
         void buildProfilePreviewMarkdown_withEnvEntries_previewContainsKey() throws Exception {
             Files.writeString(ccxConfigDir.resolve("profiles/java/profile.yaml"), JAVA_YAML_WITH_ENV_IGNORE);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("java profile must be present")
@@ -926,7 +960,7 @@ class TuiDataServiceTest {
         void buildProfilePreviewMarkdown_withIgnorePatterns_previewContainsPattern() throws Exception {
             Files.writeString(ccxConfigDir.resolve("profiles/java/profile.yaml"), JAVA_YAML_WITH_ENV_IGNORE);
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -943,7 +977,7 @@ class TuiDataServiceTest {
             Files.createDirectories(ccxConfigDir.resolve("profiles/java/claudemd"));
             Files.writeString(ccxConfigDir.resolve("profiles/java/claudemd/java.md"), "# Java fragment");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -960,7 +994,7 @@ class TuiDataServiceTest {
             Files.createDirectories(ccxConfigDir.resolve("profiles/java/rules"));
             Files.writeString(ccxConfigDir.resolve("profiles/java/rules/java-safety.md"), "# Java safety rules");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -977,7 +1011,7 @@ class TuiDataServiceTest {
             Files.createDirectories(ccxConfigDir.resolve("profiles/java/commands"));
             Files.writeString(ccxConfigDir.resolve("profiles/java/commands/review.md"), "# review command");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -995,7 +1029,7 @@ class TuiDataServiceTest {
             Files.createDirectories(badDir);
             Files.writeString(badDir.resolve("profile.yaml"), "{ this: is: not: valid: yaml :");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("broken profile must appear in the list")
@@ -1024,7 +1058,7 @@ class TuiDataServiceTest {
             yamlMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
             var emptyProfileService = new ProfileService(yamlMapper, new CcxConfigService(emptyConfigDir));
             var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
-                new CcxContextService(), emptyProfileService, new PluginMapService(),
+                new CcxContextService(), emptyProfileService, isolatedPluginMapService(),
                 new CcxConfigService(emptyConfigDir));
 
             var snapshot = svc.snapshot(projectDir);
@@ -1193,7 +1227,7 @@ class TuiDataServiceTest {
             Files.writeString(ccxConfigDir.resolve("profiles/java/claudemd/java-core.md"), "# Java core");
             Files.writeString(ccxConfigDir.resolve("profiles/java/claudemd/java-extra.md"), "# Java extra");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .as("java profile must be present")
@@ -1222,7 +1256,7 @@ class TuiDataServiceTest {
             Files.createDirectories(ccxConfigDir.resolve("profiles/java/claudemd"));
             Files.writeString(ccxConfigDir.resolve("profiles/java/claudemd/java.md"), "# Java fragment");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -1242,7 +1276,7 @@ class TuiDataServiceTest {
             Files.createDirectories(ccxConfigDir.resolve("profiles/java/claudemd"));
             Files.writeString(ccxConfigDir.resolve("profiles/java/claudemd/java.md"), "# Java fragment");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -1265,7 +1299,7 @@ class TuiDataServiceTest {
             Files.writeString(ccxConfigDir.resolve("profiles/java/rules/java-safety.md"), "# Java safety");
             Files.writeString(ccxConfigDir.resolve("profiles/java/rules/git.md"), "# Git rules");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -1290,7 +1324,7 @@ class TuiDataServiceTest {
             Files.createDirectories(ccxConfigDir.resolve("profiles/java/rules"));
             Files.writeString(ccxConfigDir.resolve("profiles/java/rules/java.md"), "# Java rules");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -1381,7 +1415,7 @@ class TuiDataServiceTest {
             Files.writeString(rulesDir.resolve("java-safety.md"), "# Java safety rules");
             Files.writeString(rulesDir.resolve("metadata.json"), "{\"version\":1}");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {
@@ -1410,7 +1444,7 @@ class TuiDataServiceTest {
             Files.writeString(rulesDir.resolve("config.json"), "{\"key\":\"value\"}");
             Files.writeString(rulesDir.resolve("index.json"), "{}");
 
-            var snapshot = service.snapshot(projectDir);
+            var snapshot = service.snapshot(projectDir, globalRoot);
 
             assertThat(snapshot.profiles())
                 .anySatisfy(p -> {

@@ -1,8 +1,10 @@
 package me.neveux.ccx.cli;
 
+import me.neveux.ccx.tui.Glyphs;
+
 /**
  * Shared CLI presentation tokens so every command speaks one visual language —
- * the same terminal-safe emoji the TUI tabs use (see {@link me.neveux.ccx.tui.Glyphs},
+ * the same terminal-safe emoji the TUI tabs use (see {@link Glyphs},
  * the single source of truth). Colour helpers stay for plain ANSI text segments; markers
  * are emoji that already carry their own colour. Colour is applied only on an interactive
  * TTY; piped or CI output stays plain so it can be parsed and asserted on.
@@ -13,20 +15,20 @@ public final class CliFormat {
     private static final String ESC = Character.toString(27);
 
     // Signature mark (matches the TUI footer brand).
-    public static final String BRAND = me.neveux.ccx.tui.Glyphs.BRAND;
+    public static final String BRAND = Glyphs.BRAND;
 
     // Health glyphs (status / doctor).
-    public static final String OK    = me.neveux.ccx.tui.Glyphs.OK;
-    public static final String WARN  = me.neveux.ccx.tui.Glyphs.WARNING;
-    public static final String ERR   = me.neveux.ccx.tui.Glyphs.ERROR;
-    public static final String INFO  = me.neveux.ccx.tui.Glyphs.INFO;
+    public static final String OK    = Glyphs.OK;
+    public static final String WARN  = Glyphs.WARNING;
+    public static final String ERR   = Glyphs.ERROR;
+    public static final String INFO  = Glyphs.INFO;
 
     // Scope glyphs (lists — mirror PluginsTab / ProfilesTab).
-    public static final String ENABLED   = me.neveux.ccx.tui.Glyphs.ENABLED;
-    public static final String GLOBAL    = me.neveux.ccx.tui.Glyphs.GLOBAL;
-    public static final String AVAILABLE = me.neveux.ccx.tui.Glyphs.AVAILABLE;
-    public static final String OFF       = me.neveux.ccx.tui.Glyphs.AVAILABLE;
-    public static final String HIDDEN    = me.neveux.ccx.tui.Glyphs.DRIFTED;
+    public static final String ENABLED   = Glyphs.ENABLED;
+    public static final String GLOBAL    = Glyphs.GLOBAL;
+    public static final String AVAILABLE = Glyphs.AVAILABLE;
+    public static final String OFF       = Glyphs.AVAILABLE;
+    public static final String HIDDEN    = Glyphs.DRIFTED;
 
     // Catppuccin Mocha swatches (hex mirrors CatppuccinTheme).
     private static final String GREEN   = "#a6e3a1";
