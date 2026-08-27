@@ -1,0 +1,28 @@
+version: 2
+
+updates:
+  # Quarkus platform, tamboui, picocli and the build plugins. Grouped into one PR per week so a
+  # platform bump and the transitive versions it drags along are reviewed (and CI-verified) together.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      maven:
+        patterns:
+          - '*'
+
+  # Actions are SHA-pinned, so dependabot is the only thing that will ever move them: it rewrites
+  # both the SHA and the trailing `# vX.Y.Z` comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - '*'

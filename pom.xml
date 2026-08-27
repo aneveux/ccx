@@ -44,15 +44,15 @@
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <quarkus.platform.version>3.37.2</quarkus.platform.version>
+        <quarkus.platform.version>3.39.1</quarkus.platform.version>
         <picocli.version>4.7.7</picocli.version>
         <tamboui.version>0.4.0</tamboui.version>
-        <jna.version>5.13.0</jna.version>
-        <jansi.version>2.4.0</jansi.version>
+        <jline.version>3.25.1</jline.version>
+        <jansi.version>2.4.3</jansi.version>
         <assertj.version>3.27.7</assertj.version>
-        <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
-        <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
-        <maven-failsafe-plugin.version>3.2.5</maven-failsafe-plugin.version>
+        <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
         <jreleaser.version>1.25.0</jreleaser.version>
     </properties>
 
@@ -71,6 +71,14 @@
                 <version>${tamboui.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- Quarkus 3.39's BOM manages jline 4.x, whose FFM terminal provider GraalVM
+                 native-image cannot parse (linkToNative polymorphic signature). tamboui 0.4.0
+                 is built against 3.25.1; pin it back until tamboui ships a jline 4 backend. -->
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline</artifactId>
+                <version>${jline.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -132,7 +140,6 @@
         <dependency>
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna</artifactId>
-            <version>${jna.version}</version>
         </dependency>
         <!-- Jansi stubs for the same native-image JLine parsing path -->
         <dependency>
