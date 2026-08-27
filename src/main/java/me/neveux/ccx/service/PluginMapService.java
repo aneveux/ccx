@@ -258,8 +258,13 @@ public class PluginMapService {
         }
     }
 
+    /**
+     * A cache is usable only if it carries both a timestamp inside the TTL and an entry map.
+     * A file missing {@code entries} — truncated, or written by a version that omitted the
+     * field — is unusable rather than fresh, so the caller rebuilds instead of dereferencing null.
+     */
     private boolean isFresh(PluginMapCache cache) {
-        if (cache.generatedAt() == null) return false;
+        if (cache.generatedAt() == null || cache.entries() == null) return false;
         return cache.generatedAt().isAfter(Instant.now().minus(MarketplaceCloneService.CACHE_TTL));
     }
 

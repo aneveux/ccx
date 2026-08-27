@@ -46,11 +46,13 @@ public record TuiSnapshot(
         String description
     ) {}
 
-    /** A named MCP server entry with its transport configuration. */
+    /**
+     * A named MCP server entry with its transport configuration. Presence in
+     * {@code settings.json} is what enables a server, so there is no enabled flag to carry.
+     */
     public record McpEntry(
         String name,
-        McpServer config,
-        boolean enabled
+        McpServer config
     ) {}
 
     /** One entry from the CLAUDE.md marker block, with its source classification and optional preview Markdown. */

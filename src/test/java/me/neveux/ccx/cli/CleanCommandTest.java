@@ -1,7 +1,10 @@
 // Wave 3 — Commands
 package me.neveux.ccx.cli;
 
+import me.neveux.ccx.model.CcxContext;
+import me.neveux.ccx.model.Permissions;
 import me.neveux.ccx.model.Settings;
+import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
@@ -18,6 +21,7 @@ import java.io.PrintWriter;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -198,6 +202,128 @@ class CleanCommandTest {
             .as("clean --force must print the tidy sign-off (Wave 5 voice)")
             .contains("tidied")
             .contains("vanilla");
+    }
+
+    // -----------------------------------------------------------------------
+    // recorded profiles are reverted, not stranded
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("when profiles are recorded in .ccx/context.json")
+    class WhenProfilesAreRecorded {
+
+        private void recordProfile() throws Exception {
+            var settings = new Settings()
+                .withEnabledPlugins(Map.of("java@my-mkt", true))
+                .withEnv(Map.of("MAVEN_OPTS", "-Xmx2g"))
+                .withPermissions(new Permissions(List.of("Bash(mvn:*)"), null));
+            settingsService.write(settings, tempDir);
+
+            var ruleFile = tempDir.resolve(".claude/rules/java.md");
+            Files.createDirectories(ruleFile.getParent());
+            Files.writeString(ruleFile, "# rules\n");
+
+            var snapshot = new CcxContext.ProfileSnapshot(
+                List.of("java@my-mkt"), List.of("java.md"),
+                List.of("Bash(mvn:*)"), List.of(),
+                List.of(), List.of(),
+                Map.of("MAVEN_OPTS", "-Xmx2g"), List.of());
+            new CcxContextService().recordEnabled("java", snapshot, tempDir);
+        }
+
+        @Test
+        @DisplayName("clean --force reverts the recorded profile's permissions, env and rule files")
+        void cleanForce_revertsRecordedProfile() throws Exception {
+            recordProfile();
+
+            var result = run("clean", "--force", "--project-dir", tempDir.toString());
+
+            assertThat(result.exitCode()).isZero();
+            var restored = settingsService.read(tempDir);
+            assertThat(restored.permissions() == null ? List.<String>of() : restored.permissions().allow())
+                .as("a permission ccx granted through the profile must go with it, not be stranded")
+                .isNullOrEmpty();
+            assertThat(restored.env())
+                .as("an env entry ccx granted through the profile must go with it")
+                .isNullOrEmpty();
+            assertThat(tempDir.resolve(".claude/rules/java.md"))
+                .as("the profile's rule file must be removed")
+                .doesNotExist();
+        }
+
+        @Test
+        @DisplayName("clean --force removes .ccx/context.json and the now-empty .ccx/ directory")
+        void cleanForce_removesContextFileAndEmptyDirectory() throws Exception {
+            recordProfile();
+            assertThat(tempDir.resolve(".ccx/context.json")).exists();
+
+            run("clean", "--force", "--project-dir", tempDir.toString());
+
+            assertThat(tempDir.resolve(".ccx/context.json"))
+                .as("the context file records what ccx owns — clean must drop it")
+                .doesNotExist();
+            assertThat(tempDir.resolve(".ccx"))
+                .as("an empty .ccx/ left behind is litter")
+                .doesNotExist();
+        }
+
+        @Test
+        @DisplayName("clean without --force names the profiles it would revert and changes nothing")
+        void cleanWithoutForce_listsProfilesToRevert() throws Exception {
+            recordProfile();
+            var contextBefore = Files.readString(tempDir.resolve(".ccx/context.json"));
+
+            var result = run("clean", "--project-dir", tempDir.toString());
+
+            assertThat(result.exitCode()).isZero();
+            assertThat(result.output())
+                .as("a dry run must name the profiles whose revert is the destructive part")
+                .contains("java");
+            assertThat(Files.readString(tempDir.resolve(".ccx/context.json")))
+                .as("a dry run must not touch the context file")
+                .isEqualTo(contextBefore);
+            assertThat(tempDir.resolve(".claude/rules/java.md"))
+                .as("a dry run must not delete rule files")
+                .exists();
+        }
+    }
+
+    @Nested
+    @DisplayName("when settings.json is corrupt")
+    class WhenSettingsJsonIsCorrupt {
+
+        private static final String CORRUPT = "{\"model\":\"claude-opus-4-8\",\"enabledPlugins\":{\"java@my-mkt\":true}";
+
+        @Test
+        @DisplayName("clean --force refuses before removing anything and leaves the files as they were")
+        void cleanForce_corruptSettings_refusesAndChangesNothing() throws Exception {
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            Files.writeString(settingsFile, CORRUPT);
+            var claudeMd = tempDir.resolve(".claude/CLAUDE.md");
+            var claudeMdContent = "# My Project\n\n<!-- ccx:begin -->\n@~/.claude/stacks/java.md\n<!-- ccx:end -->\n";
+            Files.writeString(claudeMd, claudeMdContent);
+
+            var out = new ByteArrayOutputStream();
+            var err = new ByteArrayOutputStream();
+            commandLine.setOut(new PrintWriter(out, true));
+            commandLine.setErr(new PrintWriter(err, true));
+            var exit = commandLine.execute("clean", "--force", "--project-dir", tempDir.toString());
+
+            assertThat(exit)
+                .as("a clean that cannot read settings.json must fail, not proceed")
+                .isNotZero();
+            assertThat(err.toString())
+                .as("the user has to know which file to repair")
+                .contains("Refusing to modify")
+                .contains(settingsFile.toString());
+            assertThat(settingsFile)
+                .as("the corrupt file must survive for the user to fix")
+                .hasContent(CORRUPT);
+            assertThat(claudeMd)
+                .as("nothing may be removed before the settings read succeeds — a half-clean is worse than none")
+                .hasContent(claudeMdContent);
+        }
     }
 
     // -----------------------------------------------------------------------

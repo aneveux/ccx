@@ -83,12 +83,9 @@ public class McpCommand implements Runnable {
                 .forEach(entry -> {
                     var serverName = entry.getKey();
                     var server = entry.getValue();
-                    String target;
-                    if ("http".equals(server.type())) {
-                        target = server.url() != null ? server.url() : "";
-                    } else {
-                        target = server.command() != null ? server.command() : "";
-                    }
+                    var target = server.url() != null ? server.url()
+                        : server.command() != null ? server.command()
+                        : "";
                     out.println(serverName + "  " + server.type() + "  " + target);
                 });
             out.flush();
@@ -159,7 +156,7 @@ public class McpCommand implements Runnable {
 
             var dir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
-            var settings = settingsService.read(dir);
+            var settings = settingsService.readForUpdate(dir);
             var mcpServers = settings.mcpServers() == null
                 ? new LinkedHashMap<String, McpServer>()
                 : new LinkedHashMap<>(settings.mcpServers());
@@ -193,7 +190,7 @@ public class McpCommand implements Runnable {
         public Integer call() {
             var dir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
-            var settings = settingsService.read(dir);
+            var settings = settingsService.readForUpdate(dir);
 
             if (settings.mcpServers() == null || !settings.mcpServers().containsKey(name)) {
                 spec.commandLine().getOut().println("No such server: " + name);

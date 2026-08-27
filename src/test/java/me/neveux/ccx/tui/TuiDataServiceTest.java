@@ -275,21 +275,19 @@ class TuiDataServiceTest {
                 .isEqualTo("http");
         }
 
-
         @Test
-        @DisplayName("McpEntry should expose enabled flag")
-        void snapshot_withMcpServer_mcpEntryHasEnabledFlag() {
-            var server = new McpServer("http", "https://mcp.example.com", null, null);
-            var settings = new Settings().withMcpServers(Map.of("my-server", server));
+        @DisplayName("a stdio server is listed with its command, not skipped for having no url")
+        void snapshot_withStdioMcpServer_isListedWithItsCommand() {
+            var server = new McpServer(null, null, "npx", List.of("-y", "server"));
+            var settings = new Settings().withMcpServers(Map.of("local", server));
             writeSettings(settings);
 
             var snapshot = service.snapshot(projectDir);
 
-            // An MCP server present in settings is considered enabled
             assertThat(snapshot.mcps())
-                .as("McpEntry.enabled() must be non-null (true or false)")
-                .extracting(TuiSnapshot.McpEntry::enabled)
-                .doesNotContainNull();
+                .as("a stdio server is enabled by its presence in settings.json, like any other")
+                .hasSize(1);
+            assertThat(snapshot.mcps().get(0).config().command()).isEqualTo("npx");
         }
     }
 
@@ -516,6 +514,79 @@ class TuiDataServiceTest {
                         .as("description must be the first sentence extracted from README.md")
                         .isEqualTo("A shell workflow plugin.");
                 });
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "plugin key [{0}] cannot read outside the marketplace root")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"..", "../outside", "sub/../.."})
+        @DisplayName("a traversing plugin key does not read a file outside the marketplace root")
+        void pluginEntry_description_traversingKey_readsNothing(String shortName,
+                @TempDir Path marketplaceParent) throws Exception {
+            var marketplaceDir = Files.createDirectories(marketplaceParent.resolve("mkt"));
+            Files.writeString(marketplaceParent.resolve("README.md"), "Content outside the marketplace.\n");
+            Files.createDirectories(marketplaceParent.resolve("outside"));
+            Files.writeString(marketplaceParent.resolve("outside/README.md"), "Content outside the marketplace.\n");
+
+            var src = new MarketplaceSource("my-mkt", marketplaceDir.toAbsolutePath().toString(), null, null);
+            settingsService.write(new Settings()
+                .withEnabledPlugins(Map.of(shortName + "@my-mkt", true))
+                .withExtraKnownMarketplaces(List.of(src)), projectDir);
+
+            var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
+                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxConfigService(ccxConfigDir));
+            var snap = svc.snapshot(projectDir, globalRoot);
+
+            assertThat(snap.plugins())
+                .as("the entry is still listed; only the out-of-root file read must be refused")
+                .anySatisfy(p -> {
+                    assertThat(p.shortName()).isEqualTo(shortName);
+                    assertThat(p.description())
+                        .as("a key traversing out of the marketplace root must yield no description")
+                        .isEmpty();
+                });
+        }
+
+        @Test
+        @DisplayName("an absolute plugin key does not read the absolute path it names")
+        void pluginEntry_description_absoluteKey_readsNothing(@TempDir Path marketplaceDir,
+                @TempDir Path elsewhere) throws Exception {
+            Files.writeString(elsewhere.resolve("README.md"), "Content of an unrelated directory.\n");
+
+            var src = new MarketplaceSource("my-mkt", marketplaceDir.toAbsolutePath().toString(), null, null);
+            settingsService.write(new Settings()
+                .withEnabledPlugins(Map.of(elsewhere.toAbsolutePath() + "@my-mkt", true))
+                .withExtraKnownMarketplaces(List.of(src)), projectDir);
+
+            var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
+                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxConfigService(ccxConfigDir));
+            var snap = svc.snapshot(projectDir, globalRoot);
+
+            assertThat(snap.plugins())
+                .filteredOn(p -> "my-mkt".equals(p.marketplace()))
+                .as("Path.resolve of an absolute short name discards the root entirely")
+                .isNotEmpty()
+                .allSatisfy(p -> assertThat(p.description()).isEmpty());
+        }
+
+        @Test
+        @DisplayName("a marketplace root outside the allowed directories is not read")
+        void pluginEntry_description_rootOutsideAllowedDirs_readsNothing() throws Exception {
+            var src = new MarketplaceSource("my-mkt", "/etc", null, null);
+            settingsService.write(new Settings()
+                .withEnabledPlugins(Map.of("ssl@my-mkt", true))
+                .withExtraKnownMarketplaces(List.of(src)), projectDir);
+
+            var svc = new TuiDataService(settingsService, new ClaudeMdService(), new ObjectMapper(),
+                new CcxContextService(), new ProfileService(), new PluginMapService(),
+                new CcxConfigService(ccxConfigDir));
+            var snap = svc.snapshot(projectDir, globalRoot);
+
+            assertThat(snap.plugins())
+                .filteredOn(p -> "my-mkt".equals(p.marketplace()))
+                .as("the TUI must apply the same boundary check the service layer applies")
+                .isNotEmpty()
+                .allSatisfy(p -> assertThat(p.description()).isEmpty());
         }
     }
 

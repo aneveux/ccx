@@ -273,46 +273,37 @@ class SettingsServiceTest {
         }
 
         /**
-         * End-to-end contract: a read-then-write path that uses readOrThrow
-         * must NOT leave the corrupted file silently replaced with empty settings.
-         *
-         * This test directly demonstrates the bug: if a caller does
-         *   settings = service.read(corruptFile)   // returns empty Settings
-         *   service.write(settings.withPlugin(...)) // silently overwrites with {}
-         * then the user's model, statusLine, cleanupPeriodDays, etc. are destroyed.
-         *
-         * After the fix (readOrThrow in mutating path), the IOException propagates
-         * and the original file stays intact.
-         *
-         * This test FAILS until PluginsCommand.EnableCommand and DisableCommand
-         * (and other mutating callers) switch from read() to readOrThrow().
-         *
-         * We test it here by exercising what the fixed production code does:
-         * throw when the file is corrupt rather than returning empty and overwriting.
+         * The seam every read-modify-write path goes through: it must refuse the update and leave
+         * the file exactly as it was, with a message naming the file so the user can fix it.
          */
         @Test
-        @DisplayName("mutating path via readOrThrow propagates IOException — does not silently wipe settings")
-        void mutatingPath_throwsIOException_whenSettingsJsonIsCorrupted() throws Exception {
-            var claudeDir = tempDir.resolve(".claude");
-            Files.createDirectories(claudeDir);
-            // A real settings.json with an unknown "model" key that Claude Code uses
-            var originalContent = "{\"model\":\"claude-opus-4-8\",\"enabledPlugins\":{\"java\":true}}";
-            Files.writeString(claudeDir.resolve("settings.json"), originalContent);
+        @DisplayName("readForUpdate refuses a corrupt file, naming it, and leaves the bytes untouched")
+        void readForUpdate_corruptSettings_throwsAndLeavesFileUntouched() throws Exception {
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            var corruptContent = "{\"model\":\"claude-opus-4-8\",\"enabledPlugins\":{\"java\":true}";
+            Files.writeString(settingsFile, corruptContent);
 
-            // Corrupt the file (simulates on-disk corruption mid-operation)
-            Files.writeString(claudeDir.resolve("settings.json"), "{corrupted");
+            assertThatThrownBy(() -> service.readForUpdate(tempDir))
+                .isInstanceOf(ConfigReadException.class)
+                .hasMessageContaining(settingsFile.toString())
+                .hasMessageContaining("Refusing to modify");
 
-            // The FIXED mutating path must call readOrThrow and propagate —
-            // it must NOT silently return empty settings and overwrite with {}
-            assertThatThrownBy(() -> {
-                // This is what PluginsCommand.EnableCommand will do after the fix:
-                var settings = service.readOrThrow(tempDir);
-                var modified = settings.withEnabledPlugins(java.util.Map.of("typescript", true));
-                service.write(modified, tempDir);
-            })
-                .as("the mutating path (readOrThrow + write) must throw on corruption, "
-                    + "not silently overwrite — currently FAILS because commands still use read()")
-                .isInstanceOf(IOException.class);
+            assertThat(settingsFile)
+                .as("a refused update must not touch the file the user still has to repair")
+                .hasContent(corruptContent);
+        }
+
+        @Test
+        @DisplayName("readForUpdate returns the settings when the file parses")
+        void readForUpdate_validSettings_returnsThem() throws Exception {
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            Files.writeString(settingsFile, "{\"enabledPlugins\":{\"java@mkt\":true}}");
+
+            var settings = service.readForUpdate(tempDir);
+
+            assertThat(settings.enabledPlugins()).containsEntry("java@mkt", true);
         }
     }
 

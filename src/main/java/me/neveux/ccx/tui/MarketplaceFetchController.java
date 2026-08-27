@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Owns the TUI's background marketplace fetch: the daemon thread that clones/pulls
@@ -33,7 +34,7 @@ final class MarketplaceFetchController {
     private volatile String statusMessage = "";
     private volatile Instant statusExpiry = Instant.EPOCH;
     private volatile boolean refreshPending = false;
-    private volatile boolean fetching = false;
+    private final AtomicBoolean fetching = new AtomicBoolean(false);
     private volatile int fetchedCount = 0;
     private volatile Instant cacheBuiltAt = null;
     private volatile int cachePluginCount = 0;
@@ -49,45 +50,75 @@ final class MarketplaceFetchController {
         this.projectDir = projectDir;
     }
 
-    void start(String threadName, boolean forceRefresh) {
-        var thread = new Thread(() -> {
-            fetching = true;
-            try {
-                var projectSettings = settingsService.read(projectDir);
-                var globalSettings = settingsService.read(Path.of(System.getProperty("user.home")));
-                var sources = PluginMapService.mergeSources(projectSettings, globalSettings);
-                for (var src : sources) {
-                    if ("github".equals(src.sourceType())) {
-                        try {
-                            if (forceRefresh) {
-                                marketplaceCloneService.refresh(src);
-                            } else {
-                                marketplaceCloneService.ensureLocal(src);
-                            }
-                            log.debug("marketplace fetch complete key={}", src.key());
-                        } catch (Exception e) {
-                            log.debug("marketplace fetch failed key={}", src.key(), e);
-                        }
-                    }
-                }
-                if (!sources.isEmpty()) {
-                    fetchedCount = pluginMapService.buildMap(sources).size();
-                }
-                log.debug("background marketplace fetch done count={} rebuild pending", fetchedCount);
-            } catch (Exception e) {
-                log.warn("background marketplace fetch failed", e);
-            } finally {
-                fetching = false;
-                refreshPending = true;
-                statusMessage = Glyphs.OK + " found " + fetchedCount + " plugins  " + Quips.pick(Quips.ALLGOOD, fetchedCount);
-                statusExpiry = Instant.now().plusSeconds(4);
-                cacheBuiltAt = Instant.now();
-                cachePluginCount = fetchedCount;
-            }
-        });
+    /**
+     * Starts the background fetch, unless one is already in flight. The guard is claimed on the
+     * caller's thread, so a held-down refresh key cannot land two fetches in the same clone.
+     *
+     * @return {@code true} if this call started a fetch, {@code false} if one was already running
+     */
+    boolean start(String threadName, boolean forceRefresh) {
+        if (!fetching.compareAndSet(false, true)) {
+            log.debug("marketplace fetch already in flight — ignoring request name={}", threadName);
+            return false;
+        }
+        var thread = new Thread(() -> runFetch(forceRefresh));
         thread.setDaemon(true);
         thread.setName(threadName);
         thread.start();
+        return true;
+    }
+
+    private void runFetch(boolean forceRefresh) {
+        var succeeded = false;
+        String failure = null;
+        try {
+            var projectSettings = settingsService.read(projectDir);
+            var globalSettings = settingsService.read(Path.of(System.getProperty("user.home")));
+            var sources = PluginMapService.mergeSources(projectSettings, globalSettings);
+            for (var src : sources) {
+                if ("github".equals(src.sourceType())) {
+                    try {
+                        if (forceRefresh) {
+                            marketplaceCloneService.refresh(src);
+                        } else {
+                            marketplaceCloneService.ensureLocal(src);
+                        }
+                        log.debug("marketplace fetch complete key={}", src.key());
+                    } catch (Exception e) {
+                        log.debug("marketplace fetch failed key={}", src.key(), e);
+                    }
+                }
+            }
+            if (!sources.isEmpty()) {
+                fetchedCount = pluginMapService.buildMap(sources).size();
+            }
+            succeeded = true;
+            log.debug("background marketplace fetch done count={} rebuild pending", fetchedCount);
+        } catch (Exception e) {
+            failure = describe(e);
+            log.warn("background marketplace fetch failed", e);
+        } finally {
+            if (succeeded) {
+                statusMessage = Glyphs.OK + " found " + fetchedCount + " plugins  " + Quips.pick(Quips.ALLGOOD, fetchedCount);
+                cacheBuiltAt = Instant.now();
+                cachePluginCount = fetchedCount;
+            } else {
+                // Leave cacheBuiltAt alone: stamping it would advertise a fresh cache of 0 plugins.
+                statusMessage = Glyphs.WARNING + " marketplace fetch failed: " + failure;
+            }
+            statusExpiry = Instant.now().plusSeconds(4);
+            refreshPending = true;
+            fetching.set(false);
+        }
+    }
+
+    /** The first line of an exception's message, or its type when it carries no message. */
+    private static String describe(Exception e) {
+        var message = e.getMessage();
+        if (message == null || message.isBlank()) {
+            return e.getClass().getSimpleName();
+        }
+        return message.lines().findFirst().orElse(message);
     }
 
     void loadCacheInfo() {
@@ -112,12 +143,12 @@ final class MarketplaceFetchController {
     }
 
     boolean fetching() {
-        return fetching;
+        return fetching.get();
     }
 
     /** True while a fetch runs or a status line is still within its TTL. */
     boolean active() {
-        return fetching || Instant.now().isBefore(statusExpiry);
+        return fetching.get() || Instant.now().isBefore(statusExpiry);
     }
 
     boolean statusActive() {

@@ -1,7 +1,10 @@
 package me.neveux.ccx.cli;
 
+import me.neveux.ccx.model.CcxContext;
+import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ConfigWriteException;
+import me.neveux.ccx.service.ProfileApplyService;
 import me.neveux.ccx.service.SettingsService;
 import io.quarkus.arc.Unremovable;
 import jakarta.enterprise.context.Dependent;
@@ -23,12 +26,15 @@ import java.util.LinkedHashMap;
 import java.util.concurrent.Callable;
 
 /**
- * Removes all ccx-managed configuration from a project directory: the ccx
- * marker block in {@code .claude/CLAUDE.md}, enabled plugins in
- * {@code settings.json}, the {@code .claude/rules/} directory, and any legacy
- * {@code .claudeignore} (no longer managed by ccx; deleted so files written by
- * older versions get cleaned up). Without {@code --force} (or when no TTY is
- * available) it performs a dry run, printing what would be removed.
+ * Removes all ccx-managed configuration from a project directory: every profile recorded in
+ * {@code .ccx/context.json} is reverted (its permissions, env entries, rule files, command files
+ * and CLAUDE.md fragments), then the context file itself, the ccx marker block in
+ * {@code .claude/CLAUDE.md}, the remaining enabled plugins in {@code settings.json}, the
+ * {@code .claude/rules/} directory and any legacy {@code .claudeignore} are removed.
+ *
+ * <p>Nothing is ever modified without {@code --force}: a bare {@code ccx clean} always prints
+ * what it would remove and exits. There is no interactive prompt, so the command behaves
+ * identically in a terminal, a pipe and CI.
  */
 @Command(name = "clean", description = "Remove ccx-managed configuration from project")
 @Dependent
@@ -39,18 +45,24 @@ public class CleanCommand implements Callable<Integer> {
 
     private final SettingsService settingsService;
     private final ClaudeMdService claudeMdService;
+    private final ProfileApplyService profileApplyService;
+    private final CcxContextService ccxContextService;
 
     CleanCommand() {
-        this(new SettingsService(), new ClaudeMdService());
+        this(new SettingsService(), new ClaudeMdService(), new ProfileApplyService(), new CcxContextService());
     }
 
     @Inject
-    public CleanCommand(SettingsService settingsService, ClaudeMdService claudeMdService) {
+    public CleanCommand(SettingsService settingsService, ClaudeMdService claudeMdService,
+                        ProfileApplyService profileApplyService, CcxContextService ccxContextService) {
         this.settingsService = settingsService;
         this.claudeMdService = claudeMdService;
+        this.profileApplyService = profileApplyService;
+        this.ccxContextService = ccxContextService;
     }
 
-    @Option(names = {"--force"}, description = "Skip confirmation prompt")
+    @Option(names = {"--force"},
+        description = "Actually remove the configuration; without it, clean only reports what it would remove")
     boolean force;
 
     @Option(names = {"--project-dir"}, description = "Project directory (defaults to cwd)")
@@ -67,14 +79,19 @@ public class CleanCommand implements Callable<Integer> {
 
         var claudeMdFile = dir.resolve(".claude/CLAUDE.md");
         var stacks = claudeMdService.readMarkerBlock(claudeMdFile);
-        var settings = settingsService.read(dir);
+        var context = ccxContextService.read(dir);
 
         var claudeIgnore = dir.resolve(".claudeignore");
         var rulesDir = dir.resolve(".claude/rules");
+        var contextFile = dir.resolve(".ccx/context.json");
 
-        if (!force && System.console() == null) {
-            // No TTY and no --force: print what would be removed without modifying
+        if (!force) {
+            var settings = settingsService.read(dir);
             out.println("Would remove ccx-managed content (use --force to apply):");
+            if (!context.enabledProfiles().isEmpty()) {
+                out.println("  Profiles to revert (permissions, env, rules, commands, fragments):");
+                context.enabledProfiles().keySet().stream().sorted().forEach(name -> out.println("    " + name));
+            }
             out.println("  CLAUDE.md ccx marker block:");
             stacks.forEach(l -> out.println("    " + l));
             out.println("  Enabled plugins:");
@@ -83,13 +100,25 @@ public class CleanCommand implements Callable<Integer> {
             }
             if (Files.exists(claudeIgnore)) out.println("  .claudeignore");
             if (Files.isDirectory(rulesDir)) out.println("  .claude/rules/");
-            log.debug("clean dry-run (no TTY) dir={}", dir);
+            if (Files.exists(contextFile)) out.println("  .ccx/context.json");
+            out.flush();
+            log.debug("clean dry-run dir={}", dir);
             return 0;
         }
 
-        // With --force: remove ccx-managed content
+        // Refuse an unparseable settings.json before touching anything: a half-cleaned project is
+        // worse than a refused clean, and every step below ends in a settings.json write.
+        settingsService.readForUpdate(dir);
+
+        // Revert every recorded profile first, so the resources only the snapshot knows about
+        // (permissions, env, command files, fragments) are undone rather than stranded.
+        revertRecordedProfiles(context, dir);
+        deleteContextFile(contextFile);
+
         removeMarkerBlock(claudeMdFile);
 
+        // Re-read: reverting the profiles above rewrote settings.json.
+        var settings = settingsService.readForUpdate(dir);
         settingsService.write(settings.withEnabledPlugins(new LinkedHashMap<>()), dir);
 
         if (Files.exists(claudeIgnore)) {
@@ -120,6 +149,38 @@ public class CleanCommand implements Callable<Integer> {
         out.println(CliFormat.green(CliFormat.OK) + " tidied — your .claude/ is back to vanilla");
         log.info("clean completed dir={}", dir);
         return 0;
+    }
+
+    /**
+     * Undoes every profile recorded in {@code context}, using the snapshot-driven removal path so
+     * permissions, env entries, command files and fragments go with them. The unfiltered overload
+     * is deliberate: clean removes all profiles, so there is no sibling left to preserve anything.
+     */
+    private void revertRecordedProfiles(CcxContext context, Path dir) {
+        for (var entry : context.enabledProfiles().entrySet()) {
+            var record = entry.getValue();
+            profileApplyService.remove(record != null ? record.snapshot() : null, dir);
+            log.debug("profile reverted by clean name={}", entry.getKey());
+        }
+    }
+
+    /** Deletes {@code .ccx/context.json}, and the {@code .ccx/} directory when nothing else is in it. */
+    private void deleteContextFile(Path contextFile) {
+        try {
+            if (!Files.deleteIfExists(contextFile)) {
+                return;
+            }
+            log.debug("context file removed path={}", contextFile);
+            var ccxDir = contextFile.getParent();
+            try (var entries = Files.list(ccxDir)) {
+                if (entries.findAny().isEmpty()) {
+                    Files.delete(ccxDir);
+                    log.debug(".ccx/ removed path={}", ccxDir);
+                }
+            }
+        } catch (IOException e) {
+            log.warn("failed to remove context file path={}", contextFile, e);
+        }
     }
 
     private void removeMarkerBlock(Path claudeMdFile) {

@@ -2,6 +2,8 @@ package me.neveux.ccx.tui;
 
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ConfigReadException;
+import me.neveux.ccx.service.ConfigWriteException;
 import me.neveux.ccx.service.ProfileApplyService;
 import me.neveux.ccx.service.ProfileLoadException;
 import me.neveux.ccx.service.ProfileNotFoundException;
@@ -61,26 +63,36 @@ public final class TuiActions {
             log.debug("plugin toggle blocked — globally enabled name={}", pluginName);
             return tuiDataService.snapshot(projectDir);
         }
-        var settings = settingsService.read(projectDir);
-        var enabledPlugins = new HashMap<>(settings.enabledPlugins() != null ? settings.enabledPlugins() : Map.<String, Boolean>of());
-        if (enabledPlugins.containsKey(pluginName)) {
-            enabledPlugins.remove(pluginName);
-            log.debug("plugin disabled name={} projectDir={}", pluginName, projectDir);
-        } else {
-            enabledPlugins.put(pluginName, true);
-            log.debug("plugin enabled name={} projectDir={}", pluginName, projectDir);
+        try {
+            var settings = settingsService.readForUpdate(projectDir);
+            var enabledPlugins = new HashMap<>(settings.enabledPlugins() != null ? settings.enabledPlugins() : Map.<String, Boolean>of());
+            if (enabledPlugins.containsKey(pluginName)) {
+                enabledPlugins.remove(pluginName);
+                log.debug("plugin disabled name={} projectDir={}", pluginName, projectDir);
+            } else {
+                enabledPlugins.put(pluginName, true);
+                log.debug("plugin enabled name={} projectDir={}", pluginName, projectDir);
+            }
+            settingsService.write(settings.withEnabledPlugins(enabledPlugins), projectDir);
+        } catch (ConfigReadException | ConfigWriteException e) {
+            lastError = e.getMessage();
+            log.warn("plugin toggle aborted name={} projectDir={}", pluginName, projectDir, e);
         }
-        settingsService.write(settings.withEnabledPlugins(enabledPlugins), projectDir);
         return tuiDataService.snapshot(projectDir);
     }
 
     public TuiSnapshot toggleMcp(String serverName, Path projectDir) {
-        var settings = settingsService.read(projectDir);
-        if (settings.mcpServers() != null && settings.mcpServers().containsKey(serverName)) {
-            var mcpServers = new HashMap<>(settings.mcpServers());
-            mcpServers.remove(serverName);
-            log.debug("mcp server disabled name={} projectDir={}", serverName, projectDir);
-            settingsService.write(settings.withMcpServers(mcpServers), projectDir);
+        try {
+            var settings = settingsService.readForUpdate(projectDir);
+            if (settings.mcpServers() != null && settings.mcpServers().containsKey(serverName)) {
+                var mcpServers = new HashMap<>(settings.mcpServers());
+                mcpServers.remove(serverName);
+                log.debug("mcp server disabled name={} projectDir={}", serverName, projectDir);
+                settingsService.write(settings.withMcpServers(mcpServers), projectDir);
+            }
+        } catch (ConfigReadException | ConfigWriteException e) {
+            lastError = e.getMessage();
+            log.warn("mcp toggle aborted name={} projectDir={}", serverName, projectDir, e);
         }
         return tuiDataService.snapshot(projectDir);
     }

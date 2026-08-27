@@ -406,6 +406,64 @@ class PluginsCommandTest {
     }
 
     @Nested
+    @DisplayName("mutating subcommands with a corrupt settings.json")
+    class WhenSettingsJsonIsCorrupt {
+
+        private static final String CORRUPT =
+            "{\"model\":\"claude-opus-4-8\",\"enabledPlugins\":{\"java@my-mkt\":true}";
+
+        private Path writeCorruptSettings() throws Exception {
+            var settingsFile = projectDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            Files.writeString(settingsFile, CORRUPT);
+            return settingsFile;
+        }
+
+        @Test
+        @DisplayName("enable exits non-zero, reports the file, and leaves it byte-identical")
+        void enable_corruptSettings_refusesAndPreservesFile() throws Exception {
+            var settingsFile = writeCorruptSettings();
+
+            int exit = run("plugins", "enable", "java", "--project-dir", projectDir.toString());
+
+            assertThat(exit)
+                .as("silently rewriting the file would destroy the user's model/statusLine keys")
+                .isNotZero();
+            assertThat(output())
+                .as("the diagnostic must name the file the user has to repair")
+                .contains("Refusing to modify")
+                .contains(settingsFile.toString());
+            assertThat(settingsFile).hasContent(CORRUPT);
+        }
+
+        @Test
+        @DisplayName("disable exits non-zero, reports the file, and leaves it byte-identical")
+        void disable_corruptSettings_refusesAndPreservesFile() throws Exception {
+            var settingsFile = writeCorruptSettings();
+
+            int exit = run("plugins", "disable", "java@my-mkt", "--project-dir", projectDir.toString());
+
+            assertThat(exit).isNotZero();
+            assertThat(output())
+                .contains("Refusing to modify")
+                .contains(settingsFile.toString());
+            assertThat(settingsFile).hasContent(CORRUPT);
+        }
+
+        @Test
+        @DisplayName("list still works on a corrupt file — read-only paths stay lenient")
+        void list_corruptSettings_stillReports() throws Exception {
+            writeCorruptSettings();
+
+            int exit = run("plugins", "list", "--project-dir", projectDir.toString());
+
+            assertThat(exit)
+                .as("a read-only view must degrade rather than fail: nothing is at risk of being written")
+                .isZero();
+        }
+    }
+
+    @Nested
     @DisplayName("plugins enable — security")
     class EnableSecurity {
 

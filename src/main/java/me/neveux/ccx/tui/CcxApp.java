@@ -348,7 +348,7 @@ public final class CcxApp {
     }
 
     private boolean handleMarketplaceRefresh() {
-        if (fetch.fetching()) return true;
+        // start() claims the in-flight guard itself, so a repeated keypress is a no-op here.
         fetch.start("marketplace-refresh-manual", true);
         return true;
     }

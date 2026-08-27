@@ -152,7 +152,7 @@ public class SkillsService {
                 "Invalid override mode '" + mode + "' — must be one of: " + VALID_MODES);
         }
 
-        var settings = settingsService.read(projectRoot);
+        var settings = settingsService.readForUpdate(projectRoot);
         var overrides = settings.skillOverrides() == null
             ? new HashMap<String, String>()
             : new HashMap<>(settings.skillOverrides());
@@ -170,7 +170,7 @@ public class SkillsService {
      * @param projectRoot root directory of the project
      */
     public void removeOverride(String skillId, Path projectRoot) {
-        var settings = settingsService.read(projectRoot);
+        var settings = settingsService.readForUpdate(projectRoot);
         if (settings.skillOverrides() == null) {
             return;
         }
@@ -189,7 +189,7 @@ public class SkillsService {
      * @return the skill IDs whose overrides were cleared; empty if none were set
      */
     public List<String> resetAllOverrides(Path projectRoot) {
-        var settings = settingsService.read(projectRoot);
+        var settings = settingsService.readForUpdate(projectRoot);
         if (settings.skillOverrides() == null || settings.skillOverrides().isEmpty()) {
             return Collections.emptyList();
         }

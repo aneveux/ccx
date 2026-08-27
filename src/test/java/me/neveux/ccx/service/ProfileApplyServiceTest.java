@@ -455,22 +455,62 @@ class ProfileApplyServiceTest {
         }
 
         @Test
-        @DisplayName("should not remove permissions when disabling a profile — permissions are additive")
-        void remove_doesNotRemovePermissions() {
-            var permissions = new Permissions(List.of("Bash(*)"), null);
+        @DisplayName("a permission the profile introduced is revoked when the profile is disabled")
+        void remove_revokesPermissionsItGranted() {
             var profile = new Profile()
-                .withPermissions(permissions);
+                .withPermissions(new Permissions(List.of("Bash(mvn:*)"), List.of("Read(./.env)")));
 
             var snapshot = service.apply(profile, tempDir);
             service.remove(snapshot, tempDir);
 
             var settings = settingsService.read(tempDir);
-            assertThat(settings.permissions())
-                .as("permissions must not be null after remove — permissions are never removed")
-                .isNotNull();
-            assertThat(settings.permissions().allow())
-                .as("permissions.allow must still contain Bash(*) — remove does not revoke permissions")
+            assertThat(settings.permissions() == null ? List.<String>of() : settings.permissions().allow())
+                .as("a grant that only existed because the profile was enabled must not outlive it")
+                .doesNotContain("Bash(mvn:*)");
+            assertThat(settings.permissions() == null ? List.<String>of() : settings.permissions().deny())
+                .as("a deny rule the profile introduced is removed with it")
+                .doesNotContain("Read(./.env)");
+        }
+
+        @Test
+        @DisplayName("a permission the user already had survives disabling a profile that declares it")
+        void remove_keepsUserOwnedPermissions() {
+            var settings = settingsService.read(tempDir);
+            settingsService.write(
+                settings.withPermissions(new Permissions(List.of("Bash(*)"), List.of("Read(./secrets)"))), tempDir);
+            var profile = new Profile()
+                .withPermissions(new Permissions(List.of("Bash(*)"), List.of("Read(./secrets)")));
+
+            var snapshot = service.apply(profile, tempDir);
+            service.remove(snapshot, tempDir);
+
+            var updated = settingsService.read(tempDir);
+            assertThat(updated.permissions()).isNotNull();
+            assertThat(updated.permissions().allow())
+                .as("ccx did not grant Bash(*) — the user wrote it, so disabling must not revoke it")
                 .contains("Bash(*)");
+            assertThat(updated.permissions().deny())
+                .as("a pre-existing deny rule is the user's, not ccx's, to remove")
+                .contains("Read(./secrets)");
+        }
+
+        @Test
+        @DisplayName("unknown keys under permissions survive a removal that empties allow and deny")
+        void remove_preservesUnknownPermissionKeys() {
+            var settings = settingsService.read(tempDir);
+            settingsService.write(settings.withPermissions(
+                new Permissions(null, null, java.util.Map.of("defaultMode", "acceptEdits"))), tempDir);
+            var profile = new Profile().withPermissions(new Permissions(List.of("Bash(mvn:*)"), null));
+
+            var snapshot = service.apply(profile, tempDir);
+            service.remove(snapshot, tempDir);
+
+            var updated = settingsService.read(tempDir);
+            assertThat(updated.permissions())
+                .as("dropping the whole permissions block would silently discard defaultMode")
+                .isNotNull();
+            assertThat(updated.permissions().unknownFields())
+                .containsEntry("defaultMode", "acceptEdits");
         }
 
         @Test
@@ -677,6 +717,37 @@ class ProfileApplyServiceTest {
                 assertThat(updated.enabledPlugins())
                     .as("java@mkt must be removed when no sibling profile claims it")
                     .doesNotContainKey("java@mkt");
+            }
+
+            @Test
+            @DisplayName("permission claimed by a sibling active profile must survive")
+            void safeRemove_permissionClaimedBySibling_isPreserved() throws Exception {
+                var snapshotA = new CcxContext.ProfileSnapshot(
+                    List.of(), List.of(), List.of("Bash(mvn:*)"), List.of("Read(./.env)"),
+                    List.of(), List.of(), null, List.of()
+                );
+                var snapshotB = new CcxContext.ProfileSnapshot(
+                    List.of(), List.of(), List.of("Bash(mvn:*)", "Bash(npm:*)"), List.of("Read(./.env)"),
+                    List.of(), List.of(), null, List.of()
+                );
+
+                var settings = settingsService.read(tempDir);
+                settingsService.write(settings.withPermissions(new Permissions(
+                    List.of("Bash(mvn:*)", "Bash(npm:*)"), List.of("Read(./.env)"))), tempDir);
+
+                var context = contextWithBothEnabled(snapshotA, snapshotB);
+
+                service.remove(snapshotB, tempDir, context, "B");
+
+                var updated = settingsService.read(tempDir);
+                assertThat(updated.permissions().allow())
+                    .as("Bash(mvn:*) must remain because profile A's snapshot still claims it")
+                    .contains("Bash(mvn:*)")
+                    .as("Bash(npm:*) was only claimed by B, so disabling B revokes it")
+                    .doesNotContain("Bash(npm:*)");
+                assertThat(updated.permissions().deny())
+                    .as("the deny rule is still claimed by A")
+                    .contains("Read(./.env)");
             }
 
             @Test

@@ -10,6 +10,7 @@ import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.PathSecurity;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
@@ -189,8 +190,36 @@ public class TuiDataService {
         return new TuiSnapshot.PluginEntry(qualifiedName, shortName, marketplace, status, desc);
     }
 
+    /**
+     * First line of documentation for {@code shortName} inside {@code marketplaceRoot}, or the empty
+     * string when there is none to read.
+     *
+     * <p>Both arguments come straight out of {@code settings.json} — the root from
+     * {@code extraKnownMarketplaces}, the short name from an {@code enabledPlugins} key — so both
+     * are validated the way {@link me.neveux.ccx.service.PluginMapService} and
+     * {@link me.neveux.ccx.service.SkillsService} validate the same values: an absolute or
+     * {@code ..}-bearing short name would escape the root under {@link Path#resolve}, and a root
+     * outside the allowed directories must not be read at all.
+     */
     private String readPluginDescription(Path marketplaceRoot, String shortName) {
-        var pluginDir = marketplaceRoot.resolve(shortName);
+        if (shortName.isBlank() || shortName.contains("/") || shortName.contains("\\")
+            || shortName.contains("..") || shortName.indexOf('\0') >= 0) {
+            log.debug("skipping plugin description for unusable short name shortName={}", shortName);
+            return "";
+        }
+        if (!PathSecurity.resolveAndCheck(marketplaceRoot)) {
+            log.debug("skipping plugin description: marketplace root outside allowed directories path={}",
+                marketplaceRoot);
+            return "";
+        }
+        Path root;
+        try {
+            root = marketplaceRoot.toRealPath();
+        } catch (IOException e) {
+            log.debug("marketplace root canonicalization failed path={}", marketplaceRoot, e);
+            return "";
+        }
+        var pluginDir = root.resolve(shortName);
         var pluginJsonPath = pluginDir.resolve(".claude-plugin/plugin.json");
         if (Files.exists(pluginJsonPath)) {
             try {
@@ -308,7 +337,7 @@ public class TuiDataService {
         if (settings.mcpServers() == null || settings.mcpServers().isEmpty()) return List.of();
         var result = new ArrayList<TuiSnapshot.McpEntry>();
         settings.mcpServers().forEach((name, config) ->
-            result.add(new TuiSnapshot.McpEntry(name, config, true)));
+            result.add(new TuiSnapshot.McpEntry(name, config)));
         return result;
     }
 

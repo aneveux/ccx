@@ -306,8 +306,8 @@ class MarketplaceFetchControllerTest {
         }
 
         @Test
-        @DisplayName("finally invariant: when buildMap throws, fetching still flips false, latch still holds, cache info set with 0 plugins")
-        void start_when_buildMapThrows_then_finallyInvariantsHold() throws Exception {
+        @DisplayName("when buildMap throws: fetching flips false, latch holds, and the failure is reported instead of a fake success")
+        void start_when_buildMapThrows_then_failureIsReported() throws Exception {
             var clone = new RecordingCloneService();
             var pluginMap = new PluginMapService() {
                 @Override
@@ -327,10 +327,75 @@ class MarketplaceFetchControllerTest {
             assertThat(controller.consumeRefreshPending())
                 .as("the finally block must latch refreshPending even when buildMap throws")
                 .isTrue();
+            assertThat(controller.statusMessage())
+                .as("a failed fetch must name the failure, not claim it found 0 plugins")
+                .contains("marketplace fetch failed")
+                .contains("buildMap exploded")
+                .doesNotContain("found 0 plugins");
             assertThat(controller.formatCacheInfo())
-                .as("cacheBuiltAt is set in finally even on failure; fetchedCount stays 0")
-                .isNotEqualTo("💡 no cache")
-                .contains("0 plugins");
+                .as("a failed fetch must not stamp a fresh cache of 0 plugins")
+                .isEqualTo("💡 no cache");
+        }
+
+        @Test
+        @DisplayName("a failed fetch with a message-less exception still names the exception type")
+        void start_when_failureHasNoMessage_then_statusNamesTheType() throws Exception {
+            var clone = new RecordingCloneService();
+            var pluginMap = new PluginMapService() {
+                @Override
+                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+                    throw new IllegalStateException();
+                }
+            };
+            var controller = new MarketplaceFetchController(
+                settingsReturning(settingsWith(githubSource())), clone, pluginMap, tempDir);
+
+            controller.start("test-fetch-nomsg", false);
+            awaitFetchDone("test-fetch-nomsg");
+
+            assertThat(controller.statusMessage())
+                .as("a null message must not surface as the string \"null\" in the footer")
+                .contains("IllegalStateException")
+                .doesNotContain("null");
+        }
+
+        @Test
+        @DisplayName("a second start() while a fetch is in flight is refused, so two threads never share one clone")
+        void start_when_alreadyFetching_then_secondCallIsRefused() throws Exception {
+            var clone = new RecordingCloneService();
+            var release = new java.util.concurrent.CountDownLatch(1);
+            var buildMapCalls = new java.util.concurrent.atomic.AtomicInteger();
+            var pluginMap = new PluginMapService() {
+                @Override
+                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+                    buildMapCalls.incrementAndGet();
+                    try {
+                        release.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return Map.of("a", "owner/a");
+                }
+            };
+            var controller = new MarketplaceFetchController(
+                settingsReturning(settingsWith(githubSource())), clone, pluginMap, tempDir);
+
+            var first = controller.start("test-fetch-guard-1", true);
+            var second = controller.start("test-fetch-guard-2", true);
+            release.countDown();
+            awaitFetchDone("test-fetch-guard-1");
+
+            assertThat(first).as("the first call claims the guard").isTrue();
+            assertThat(second)
+                .as("the guard is claimed on the caller's thread, so a repeated keypress cannot start a second fetch")
+                .isFalse();
+            assertThat(buildMapCalls)
+                .as("only one fetch may ever run against the same clone")
+                .hasValue(1);
+            assertThat(controller.start("test-fetch-guard-3", true))
+                .as("once the fetch finished the guard is released again")
+                .isTrue();
+            awaitFetchDone("test-fetch-guard-3");
         }
 
         @Test

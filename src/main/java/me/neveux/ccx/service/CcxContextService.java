@@ -55,8 +55,11 @@ public class CcxContextService {
      * Reads the context file from {@code <projectRoot>/.ccx/context.json}. Returns an
      * empty context (no enabled profiles) if the file does not exist or cannot be parsed.
      *
+     * <p>The result is normalised: neither {@code version} nor {@code enabledProfiles} is ever
+     * null, so callers can dereference the map directly however the file on disk was shaped.
+     *
      * @param projectRoot root directory of the project
-     * @return the current context; never null
+     * @return the current context; never null, with a non-null {@code enabledProfiles}
      */
     public CcxContext read(Path projectRoot) {
         var contextFile = projectRoot.resolve(".ccx/context.json");
@@ -65,13 +68,37 @@ public class CcxContextService {
             return CcxContext.empty();
         }
         try {
-            var ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
+            var ctx = normalize(mapper.readValue(contextFile.toFile(), CcxContext.class));
             log.debug("context loaded path={}", contextFile);
             return ctx;
         } catch (IOException e) {
             log.warn("failed to read context path={} — returning empty context", contextFile, e);
             return CcxContext.empty();
         }
+    }
+
+    /**
+     * Like {@link #read} but propagating a parse failure, for the mutating paths: rewriting a
+     * context file ccx could not parse would drop every profile recorded in it.
+     *
+     * @throws IOException if the file exists but cannot be parsed
+     */
+    private CcxContext readOrThrow(Path projectRoot) throws IOException {
+        var contextFile = projectRoot.resolve(".ccx/context.json");
+        if (!Files.exists(contextFile)) {
+            return CcxContext.empty();
+        }
+        return normalize(mapper.readValue(contextFile.toFile(), CcxContext.class));
+    }
+
+    /** Substitutes defaults for a missing {@code version} or {@code enabledProfiles}. */
+    private static CcxContext normalize(CcxContext ctx) {
+        if (ctx.version() != null && ctx.enabledProfiles() != null) {
+            return ctx;
+        }
+        return new CcxContext(
+            ctx.version() != null ? ctx.version() : CcxContext.FORMAT_VERSION,
+            ctx.enabledProfiles() != null ? ctx.enabledProfiles() : Map.of());
     }
 
     /**
@@ -102,13 +129,7 @@ public class CcxContextService {
      * @throws IOException if the context file cannot be read or written
      */
     public void recordEnabled(String profileName, CcxContext.ProfileSnapshot snapshot, Path projectRoot) throws IOException {
-        var contextFile = projectRoot.resolve(".ccx/context.json");
-        CcxContext ctx;
-        if (!Files.exists(contextFile)) {
-            ctx = CcxContext.empty();
-        } else {
-            ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
-        }
+        var ctx = readOrThrow(projectRoot);
         var profiles = new HashMap<>(ctx.enabledProfiles());
         profiles.put(profileName, new CcxContext.ProfileRecord(Instant.now(), snapshot));
         write(new CcxContext(ctx.version(), profiles), projectRoot);
@@ -124,13 +145,7 @@ public class CcxContextService {
      * @throws IOException if the context file cannot be read or written
      */
     public void recordDisabled(String profileName, Path projectRoot) throws IOException {
-        var contextFile = projectRoot.resolve(".ccx/context.json");
-        CcxContext ctx;
-        if (!Files.exists(contextFile)) {
-            ctx = CcxContext.empty();
-        } else {
-            ctx = mapper.readValue(contextFile.toFile(), CcxContext.class);
-        }
+        var ctx = readOrThrow(projectRoot);
         var profiles = new HashMap<>(ctx.enabledProfiles());
         profiles.remove(profileName);
         write(new CcxContext(ctx.version(), profiles), projectRoot);

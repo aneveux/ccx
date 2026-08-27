@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -123,7 +124,8 @@ public class ProfileApplyService {
     public CcxContext.ProfileSnapshot apply(Profile resolved, Path projectRoot, boolean overwrite,
                                             CcxContext context) {
         var profileName = resolved.metadata() != null ? resolved.metadata().name() : null;
-        var s = settingsService.read(projectRoot);
+        var s = settingsService.readForUpdate(projectRoot);
+        var priorPermissions = s.permissions();
 
         var writtenPlugins = new ArrayList<String>();
         s = applyPluginsAndPermissions(s, resolved, projectRoot, writtenPlugins);
@@ -139,12 +141,14 @@ public class ProfileApplyService {
         var writtenFragments = applyFragments(projectRoot, profileName);
         var writtenCommands = applyCommands(projectRoot, overwrite, profileName);
 
-        var permissionsAllow = resolved.permissions() != null && resolved.permissions().allow() != null
-            ? List.copyOf(resolved.permissions().allow())
-            : List.<String>of();
-        var permissionsDeny = resolved.permissions() != null && resolved.permissions().deny() != null
-            ? List.copyOf(resolved.permissions().deny())
-            : List.<String>of();
+        var permissionsAllow = claimedPermissions(
+            resolved.permissions() != null ? resolved.permissions().allow() : null,
+            priorPermissions != null ? priorPermissions.allow() : null,
+            ccxClaimedPermissions(context, CcxContext.ProfileSnapshot::permissionsAllow));
+        var permissionsDeny = claimedPermissions(
+            resolved.permissions() != null ? resolved.permissions().deny() : null,
+            priorPermissions != null ? priorPermissions.deny() : null,
+            ccxClaimedPermissions(context, CcxContext.ProfileSnapshot::permissionsDeny));
 
         log.info("profile applied plugins={} rules={} commands={} fragments={} env={}",
             writtenPlugins, writtenRules, writtenCommands, writtenFragments,
@@ -358,18 +362,52 @@ public class ProfileApplyService {
      * the user, and must never be claimed by a profile — claiming it would delete it on disable.
      */
     private static Set<String> ccxOwnedDenyRules(CcxContext context) {
+        return ccxClaimedPermissions(context, CcxContext.ProfileSnapshot::ignorePatterns).stream()
+            .filter(pattern -> !pattern.isBlank())
+            .map(IgnorePatterns::toReadDenyRule)
+            .collect(Collectors.toSet());
+    }
+
+    /**
+     * Collects the permission entries that some profile recorded in {@code context} already
+     * claimed, reading them through {@code snapshotField}.
+     */
+    private static Set<String> ccxClaimedPermissions(
+        CcxContext context, Function<CcxContext.ProfileSnapshot, List<String>> snapshotField) {
         if (context == null || context.enabledProfiles() == null) {
             return Set.of();
         }
         return context.enabledProfiles().values().stream()
+            .filter(Objects::nonNull)
             .map(CcxContext.ProfileRecord::snapshot)
             .filter(Objects::nonNull)
-            .map(CcxContext.ProfileSnapshot::ignorePatterns)
+            .map(snapshotField)
             .filter(Objects::nonNull)
             .flatMap(List::stream)
-            .filter(pattern -> pattern != null && !pattern.isBlank())
-            .map(IgnorePatterns::toReadDenyRule)
+            .filter(Objects::nonNull)
             .collect(Collectors.toSet());
+    }
+
+    /**
+     * Narrows the permission entries a profile declares down to the ones it is allowed to revoke
+     * on disable: an entry absent from {@code existing} is one this apply introduced, and an entry
+     * some recorded profile already claimed stays ccx-owned. Everything else was written by the
+     * user and must survive the profile being disabled.
+     *
+     * @param declared entries the resolved profile asks for
+     * @param existing entries already present in {@code settings.json} before this apply
+     * @param ccxOwned entries a recorded profile snapshot already claims
+     */
+    private static List<String> claimedPermissions(List<String> declared, List<String> existing,
+                                                   Set<String> ccxOwned) {
+        if (declared == null || declared.isEmpty()) {
+            return List.of();
+        }
+        var existingEntries = existing != null ? Set.copyOf(existing) : Set.<String>of();
+        return declared.stream()
+            .filter(entry -> !existingEntries.contains(entry) || ccxOwned.contains(entry))
+            .distinct()
+            .toList();
     }
 
     /**
@@ -378,22 +416,34 @@ public class ProfileApplyService {
      */
     public void remove(CcxContext.ProfileSnapshot snapshot, Path projectRoot,
                        CcxContext context, String profileName) {
+        if (snapshot == null) {
+            log.debug("no snapshot recorded for profile={} — nothing to remove", profileName);
+            return;
+        }
         var siblingPlugins = new HashSet<String>();
         var siblingRules = new HashSet<String>();
         var siblingFragments = new HashSet<String>();
         var siblingCommands = new HashSet<String>();
         var siblingEnvKeys = new HashSet<String>();
         var siblingIgnorePatterns = new HashSet<String>();
+        var siblingPermissionsAllow = new HashSet<String>();
+        var siblingPermissionsDeny = new HashSet<String>();
 
-        for (var entry : context.enabledProfiles().entrySet()) {
+        var recordedProfiles = context != null && context.enabledProfiles() != null
+            ? context.enabledProfiles()
+            : Map.<String, CcxContext.ProfileRecord>of();
+        for (var entry : recordedProfiles.entrySet()) {
             if (entry.getKey().equals(profileName)) continue;
-            var s = entry.getValue().snapshot();
+            var s = entry.getValue() != null ? entry.getValue().snapshot() : null;
+            if (s == null) continue;
             if (s.plugins() != null) siblingPlugins.addAll(s.plugins());
             if (s.rules() != null) siblingRules.addAll(s.rules());
             if (s.fragments() != null) siblingFragments.addAll(s.fragments());
             if (s.commands() != null) siblingCommands.addAll(s.commands());
             if (s.env() != null) siblingEnvKeys.addAll(s.env().keySet());
             if (s.ignorePatterns() != null) siblingIgnorePatterns.addAll(s.ignorePatterns());
+            if (s.permissionsAllow() != null) siblingPermissionsAllow.addAll(s.permissionsAllow());
+            if (s.permissionsDeny() != null) siblingPermissionsDeny.addAll(s.permissionsDeny());
         }
 
         var filteredPlugins = snapshot.plugins() == null ? List.<String>of()
@@ -410,12 +460,16 @@ public class ProfileApplyService {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         var filteredIgnorePatterns = snapshot.ignorePatterns() == null ? List.<String>of()
             : snapshot.ignorePatterns().stream().filter(p -> !siblingIgnorePatterns.contains(p)).toList();
+        var filteredAllow = snapshot.permissionsAllow() == null ? List.<String>of()
+            : snapshot.permissionsAllow().stream().filter(a -> !siblingPermissionsAllow.contains(a)).toList();
+        var filteredDeny = snapshot.permissionsDeny() == null ? List.<String>of()
+            : snapshot.permissionsDeny().stream().filter(d -> !siblingPermissionsDeny.contains(d)).toList();
 
         var filteredSnapshot = new CcxContext.ProfileSnapshot(
             filteredPlugins,
             filteredRules,
-            snapshot.permissionsAllow(),
-            snapshot.permissionsDeny(),
+            filteredAllow,
+            filteredDeny,
             filteredCommands,
             filteredFragments,
             filteredEnv,
@@ -434,17 +488,24 @@ public class ProfileApplyService {
      * @param projectRoot root of the project to clean up
      */
     public void remove(CcxContext.ProfileSnapshot snapshot, Path projectRoot) {
+        if (snapshot == null) {
+            log.debug("no snapshot to remove root={}", projectRoot);
+            return;
+        }
+        var recordedPlugins = snapshot.plugins() != null ? snapshot.plugins() : List.<String>of();
+        var recordedRules = snapshot.rules() != null ? snapshot.rules() : List.<String>of();
+
         // Remove plugins from settings
-        var settings = settingsService.read(projectRoot);
-        if (settings.enabledPlugins() != null && !snapshot.plugins().isEmpty()) {
+        var settings = settingsService.readForUpdate(projectRoot);
+        if (settings.enabledPlugins() != null && !recordedPlugins.isEmpty()) {
             var updated = new LinkedHashMap<>(settings.enabledPlugins());
-            snapshot.plugins().forEach(updated::remove);
+            recordedPlugins.forEach(updated::remove);
             settingsService.write(settings.withEnabledPlugins(updated), projectRoot);
         }
 
         // Remove rule files
         var rulesDir = projectRoot.resolve(".claude/rules").normalize();
-        for (var rule : snapshot.rules()) {
+        for (var rule : recordedRules) {
             var ruleFile = rulesDir.resolve(rule + ".md").normalize();
             if (!ruleFile.startsWith(rulesDir)) {
                 log.warn("Skipping removal of rule outside rules dir: {}", rule);
@@ -484,7 +545,7 @@ public class ProfileApplyService {
 
         // Remove env vars written by this profile
         if (snapshot.env() != null && !snapshot.env().isEmpty()) {
-            var settingsForEnv = settingsService.read(projectRoot);
+            var settingsForEnv = settingsService.readForUpdate(projectRoot);
             if (settingsForEnv.env() != null) {
                 var updatedEnv = new LinkedHashMap<>(settingsForEnv.env());
                 snapshot.env().keySet().forEach(updatedEnv::remove);
@@ -493,10 +554,10 @@ public class ProfileApplyService {
             }
         }
 
-        // Remove the deny rules this profile's ignore patterns contributed
-        removeIgnoreDenyRules(snapshot, projectRoot);
+        // Remove the permission entries this profile contributed
+        removePermissions(snapshot, projectRoot);
 
-        log.info("profile removed plugins={} rules={}", snapshot.plugins(), snapshot.rules());
+        log.info("profile removed plugins={} rules={}", recordedPlugins, recordedRules);
     }
 
     private boolean isUnderConfigDir(Path file) {
@@ -509,35 +570,62 @@ public class ProfileApplyService {
     }
 
     /**
-     * Deletes from {@code permissions.deny} the rules that {@link #applyIgnoreAsDenyRules} derived
-     * from the snapshot's ignore patterns, leaving {@code permissions.allow} and every other deny
-     * rule untouched.
+     * Deletes from {@code permissions} every entry this profile claimed: the {@code allow} and
+     * {@code deny} entries recorded in the snapshot, plus the deny rules
+     * {@link #applyIgnoreAsDenyRules} derived from its ignore patterns. Entries the user wrote by
+     * hand were never claimed in the snapshot, so they survive untouched — as do any unmodelled
+     * keys inside the {@code permissions} block.
      */
-    private void removeIgnoreDenyRules(CcxContext.ProfileSnapshot snapshot, Path projectRoot) {
-        if (snapshot.ignorePatterns() == null || snapshot.ignorePatterns().isEmpty()) {
+    private void removePermissions(CcxContext.ProfileSnapshot snapshot, Path projectRoot) {
+        var allowToRemove = snapshot.permissionsAllow() != null
+            ? Set.copyOf(snapshot.permissionsAllow())
+            : Set.<String>of();
+        var denyToRemove = new HashSet<String>();
+        if (snapshot.permissionsDeny() != null) {
+            denyToRemove.addAll(snapshot.permissionsDeny());
+        }
+        if (snapshot.ignorePatterns() != null) {
+            snapshot.ignorePatterns().stream()
+                .filter(pattern -> pattern != null && !pattern.isBlank())
+                .map(IgnorePatterns::toReadDenyRule)
+                .forEach(denyToRemove::add);
+        }
+        if (allowToRemove.isEmpty() && denyToRemove.isEmpty()) {
             return;
         }
-        var settings = settingsService.read(projectRoot);
+        var settings = settingsService.readForUpdate(projectRoot);
         var permissions = settings.permissions();
-        if (permissions == null || permissions.deny() == null) {
+        if (permissions == null) {
             return;
         }
-        var rulesToRemove = snapshot.ignorePatterns().stream()
-            .filter(pattern -> pattern != null && !pattern.isBlank())
-            .map(IgnorePatterns::toReadDenyRule)
-            .collect(Collectors.toSet());
-        var remainingDeny = permissions.deny().stream()
-            .filter(rule -> !rulesToRemove.contains(rule))
-            .toList();
-        if (remainingDeny.size() == permissions.deny().size()) {
+        var remainingAllow = retainAllExcept(permissions.allow(), allowToRemove);
+        var remainingDeny = retainAllExcept(permissions.deny(), denyToRemove);
+        if (size(remainingAllow) == size(permissions.allow())
+            && size(remainingDeny) == size(permissions.deny())) {
             return;
         }
-        var deny = remainingDeny.isEmpty() ? null : remainingDeny;
-        var updated = permissions.allow() == null && deny == null
+        var unknownFields = permissions.unknownFields();
+        var updated = remainingAllow == null && remainingDeny == null && unknownFields.isEmpty()
             ? null
-            : new Permissions(permissions.allow(), deny);
+            : new Permissions(remainingAllow, remainingDeny, unknownFields.isEmpty() ? null : unknownFields);
         settingsService.write(settings.withPermissions(updated), projectRoot);
-        log.debug("ignore deny rules removed rules={}", rulesToRemove);
+        log.debug("permission entries removed allow={} deny={}", allowToRemove, denyToRemove);
+    }
+
+    /**
+     * Returns {@code entries} without any member of {@code removals}, collapsing an empty
+     * result to {@code null} so the key drops out of {@code settings.json} entirely.
+     */
+    private static List<String> retainAllExcept(List<String> entries, Set<String> removals) {
+        if (entries == null) {
+            return null;
+        }
+        var remaining = entries.stream().filter(entry -> !removals.contains(entry)).toList();
+        return remaining.isEmpty() ? null : remaining;
+    }
+
+    private static int size(List<String> entries) {
+        return entries != null ? entries.size() : 0;
     }
 
     private Permissions mergePermissionsList(Permissions target, Permissions source) {
@@ -545,6 +633,7 @@ public class ProfileApplyService {
         var targetDeny = target != null ? target.deny() : null;
         var allow = source.allow() == null ? targetAllow : ListUtils.orderedUnion(targetAllow, source.allow());
         var deny = source.deny() == null ? targetDeny : ListUtils.orderedUnion(targetDeny, source.deny());
-        return new Permissions(allow, deny);
+        var unknownFields = target != null ? target.unknownFields() : Map.<String, Object>of();
+        return new Permissions(allow, deny, unknownFields.isEmpty() ? null : unknownFields);
     }
 }

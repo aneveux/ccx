@@ -79,6 +79,29 @@ public class SettingsService {
     }
 
     /**
+     * Reads settings for a read-modify-write cycle: a malformed file aborts the operation
+     * instead of being silently replaced by defaults.
+     *
+     * <p>Every caller that goes on to call {@link #write} must use this method rather than
+     * {@link #read} — writing back a lenient read of an unparsable file discards the parts
+     * ccx could not understand.
+     *
+     * @param projectRoot root directory of the project
+     * @return the current settings; never null
+     * @throws ConfigReadException if the file exists but cannot be parsed
+     */
+    public Settings readForUpdate(Path projectRoot) {
+        try {
+            return readOrThrow(projectRoot);
+        } catch (IOException e) {
+            var settingsFile = projectRoot.resolve(".claude/settings.json");
+            throw new ConfigReadException(
+                "Refusing to modify " + settingsFile + " — it is not valid JSON ccx can round-trip ("
+                    + e.getMessage() + "). Fix or move the file aside, then retry.", e);
+        }
+    }
+
+    /**
      * Writes {@code settings} to {@code <projectRoot>/.claude/settings.json} atomically,
      * creating the {@code .claude/} directory if it does not exist.
      *

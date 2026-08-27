@@ -85,6 +85,7 @@ class MarketplaceCloneServiceTest {
             var source = githubSource("myplugins", "org/myplugins");
             var cacheDir = svc.localCacheDir("myplugins");
             Files.createDirectories(cacheDir);
+            Files.writeString(cacheDir.resolve(".ccx-repo"), "org/myplugins\n");
             Files.writeString(cacheDir.resolve(".ccx-fetched"),
                 Instant.now().minus(169, ChronoUnit.HOURS).toString());
 
@@ -93,6 +94,112 @@ class MarketplaceCloneServiceTest {
             assertThat(svc.pullCalled).isTrue();
             assertThat(svc.cloneCalled).isFalse();
             assertThat(result).isEqualTo(cacheDir);
+        }
+
+        @Test
+        @DisplayName("a fresh cache cloned from another repo is discarded and re-cloned")
+        void ensureLocal_github_cacheFromDifferentRepo_isDiscarded() throws IOException {
+            var svc = new TestableService();
+            var cacheDir = svc.localCacheDir("myplugins");
+            Files.createDirectories(cacheDir);
+            Files.writeString(cacheDir.resolve(".ccx-repo"), "attacker/evil\n");
+            Files.writeString(cacheDir.resolve(".ccx-fetched"), Instant.now().toString());
+            Files.writeString(cacheDir.resolve("poisoned.txt"), "content from the wrong repo");
+
+            var result = svc.ensureLocal(githubSource("myplugins", "org/myplugins"));
+
+            assertThat(svc.cloneCalled)
+                .as("a cache entry cloned from another repository must not be reused, however fresh")
+                .isTrue();
+            assertThat(svc.pullCalled).isFalse();
+            assertThat(svc.lastClonedRepo).isEqualTo("org/myplugins");
+            assertThat(cacheDir.resolve("poisoned.txt"))
+                .as("the foreign clone's content must be gone, not merged into the new clone")
+                .doesNotExist();
+            assertThat(result).isEqualTo(cacheDir);
+        }
+
+        @Test
+        @DisplayName("a cache with no recorded provenance is discarded and re-cloned")
+        void ensureLocal_github_cacheWithoutProvenance_isDiscarded() throws IOException {
+            var svc = new TestableService();
+            var cacheDir = svc.localCacheDir("myplugins");
+            Files.createDirectories(cacheDir);
+            Files.writeString(cacheDir.resolve(".ccx-fetched"), Instant.now().toString());
+
+            svc.ensureLocal(githubSource("myplugins", "org/myplugins"));
+
+            assertThat(svc.cloneCalled)
+                .as("an unrecorded clone cannot be attributed to the declared repo, so it is re-cloned")
+                .isTrue();
+            assertThat(svc.pullCalled).isFalse();
+        }
+
+        @Test
+        @DisplayName("a successful clone records the repository it came from")
+        void ensureLocal_github_recordsProvenance() throws IOException {
+            var svc = new TestableService();
+
+            svc.ensureLocal(githubSource("myplugins", "org/myplugins"));
+
+            assertThat(svc.localCacheDir("myplugins").resolve(".ccx-repo"))
+                .as("the repo marker is what lets a later call detect a key rebound to another repo")
+                .hasContent("org/myplugins");
+        }
+
+        @Test
+        @DisplayName("a matching provenance marker keeps a fresh cache untouched")
+        void ensureLocal_github_matchingProvenance_reusesFreshCache() throws IOException {
+            var svc = new TestableService();
+            var cacheDir = svc.localCacheDir("myplugins");
+            Files.createDirectories(cacheDir);
+            Files.writeString(cacheDir.resolve(".ccx-repo"), "org/myplugins\n");
+            Files.writeString(cacheDir.resolve(".ccx-fetched"), Instant.now().toString());
+            Files.writeString(cacheDir.resolve("plugin.md"), "cached content");
+
+            var result = svc.ensureLocal(githubSource("myplugins", "org/myplugins"));
+
+            assertThat(svc.cloneCalled).isFalse();
+            assertThat(svc.pullCalled).isFalse();
+            assertThat(cacheDir.resolve("plugin.md")).exists();
+            assertThat(result).isEqualTo(cacheDir);
+        }
+    }
+
+    @Nested
+    @DisplayName("refresh()")
+    class Refresh {
+
+        @Test
+        @DisplayName("a cache cloned from another repo is discarded rather than pulled")
+        void refresh_cacheFromDifferentRepo_isDiscarded() throws IOException {
+            var svc = new TestableService();
+            var cacheDir = svc.localCacheDir("myplugins");
+            Files.createDirectories(cacheDir);
+            Files.writeString(cacheDir.resolve(".ccx-repo"), "attacker/evil\n");
+
+            svc.refresh(githubSource("myplugins", "org/myplugins"));
+
+            assertThat(svc.pullCalled)
+                .as("pulling inside a foreign clone would keep the wrong repository's content")
+                .isFalse();
+            assertThat(svc.cloneCalled).isTrue();
+            assertThat(svc.lastClonedRepo).isEqualTo("org/myplugins");
+        }
+
+        @Test
+        @DisplayName("a matching cache is pulled and the provenance marker is preserved")
+        void refresh_matchingProvenance_pulls() throws IOException {
+            var svc = new TestableService();
+            var cacheDir = svc.localCacheDir("myplugins");
+            Files.createDirectories(cacheDir);
+            Files.writeString(cacheDir.resolve(".ccx-repo"), "org/myplugins\n");
+
+            svc.refresh(githubSource("myplugins", "org/myplugins"));
+
+            assertThat(svc.pullCalled).isTrue();
+            assertThat(svc.cloneCalled).isFalse();
+            assertThat(cacheDir.resolve(".ccx-repo")).hasContent("org/myplugins");
         }
 
         @Test
@@ -223,6 +330,33 @@ class MarketplaceCloneServiceTest {
             assertThatThrownBy(() -> svc.localCacheDir("ke\0y"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("invalid marketplace key");
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "rejects key that resolves to the cache root: [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"", " ", ".", "..", "a b", "key;rm", "café"})
+        @DisplayName("rejects keys outside the allowlist, including those resolving to the cache root")
+        void localCacheDir_rejectsNonAllowlistedKeys(String key) {
+            var svc = new MarketplaceCloneService();
+
+            assertThatThrownBy(() -> svc.localCacheDir(key))
+                .as("key [%s] must be rejected: it either escapes or collapses onto the cache root", key)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid marketplace key");
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "accepts key: {0}")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "myplugins", "java-stack", "ccx.marketplace", "a_b", "Team123"
+        })
+        @DisplayName("accepts ordinary marketplace keys, resolving them under the cache root")
+        void localCacheDir_acceptsAllowlistedKeys(String key) {
+            var svc = new MarketplaceCloneService();
+
+            var dir = svc.localCacheDir(key);
+
+            assertThat(dir.getParent())
+                .isEqualTo(Path.of(System.getProperty("user.home"), ".cache", "ccx", "marketplaces"));
+            assertThat(dir.getFileName()).isEqualTo(Path.of(key));
         }
     }
 

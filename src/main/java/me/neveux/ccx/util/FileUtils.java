@@ -39,17 +39,25 @@ public final class FileUtils {
     }
 
     /**
-     * Writes {@code target} atomically: the {@code writer} populates a {@code .tmp}
-     * sibling, which is then moved into place with {@link StandardCopyOption#ATOMIC_MOVE}.
-     * If the writer or the move fails, the {@code .tmp} sibling is removed so a failed
-     * write never leaves an orphan behind, and the pre-existing target stays untouched.
+     * Writes {@code target} atomically: the {@code writer} populates a freshly created scratch
+     * file in the same directory, which is then moved into place with
+     * {@link StandardCopyOption#ATOMIC_MOVE}. If the writer or the move fails, the scratch file is
+     * removed so a failed write never leaves an orphan behind, and the pre-existing target stays
+     * untouched.
+     *
+     * <p>The scratch file is created by {@link Files#createTempFile(Path, String, String,
+     * java.nio.file.attribute.FileAttribute...)}, which fails rather than following an existing
+     * entry at the same path. A predictable {@code <target>.tmp} sibling would let anything that
+     * can plant a symlink there — a checked-out repository, another process — redirect the write
+     * to an arbitrary file, and would also make two concurrent writes to the same target collide.
      */
     public static void atomicWrite(Path target, ThrowingConsumer<Path> writer) throws IOException {
         var parent = target.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
-        var tmp = target.resolveSibling(target.getFileName() + ".tmp");
+        var directory = parent != null ? parent : Path.of(".");
+        var tmp = Files.createTempFile(directory, target.getFileName() + ".", ".tmp");
         try {
             writer.accept(tmp);
             Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

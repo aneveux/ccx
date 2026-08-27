@@ -22,8 +22,8 @@ class McpTabTest {
         var stdioServer = new McpServer("stdio", null, "python", List.of("-m", "mcp_server"));
 
         var mcpEntries = List.of(
-            new TuiSnapshot.McpEntry("myserver", sseServer, true),
-            new TuiSnapshot.McpEntry("otherserver", stdioServer, true)
+            new TuiSnapshot.McpEntry("myserver", sseServer),
+            new TuiSnapshot.McpEntry("otherserver", stdioServer)
         );
 
         return new TuiSnapshot(

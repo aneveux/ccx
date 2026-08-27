@@ -153,6 +153,105 @@ class ClaudeMdServiceTest {
     }
 
     // -----------------------------------------------------------------------
+    // normalisation: whatever the file looks like, one block comes out
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("writeMarkerBlock() normalisation")
+    class WriteNormalisesToOneBlock {
+
+        @Test
+        @DisplayName("should collapse two well-formed blocks into one at the first block's position")
+        void writeMarkerBlock_twoBlocks_collapsesToOne() throws Exception {
+            var claudeMd = tempDir.resolve("CLAUDE.md");
+            Files.writeString(claudeMd, """
+                # My Project
+
+                <!-- ccx:begin -->
+                @~/.claude/stacks/first.md
+                <!-- ccx:end -->
+
+                Between the blocks.
+
+                <!-- ccx:begin -->
+                @~/.claude/stacks/second.md
+                <!-- ccx:end -->
+
+                After both.
+                """);
+
+            service.writeMarkerBlock(claudeMd, List.of("@~/.claude/stacks/java.md"));
+
+            var content = Files.readString(claudeMd);
+            assertThat(content.lines().filter(line -> line.contains("<!-- ccx:begin -->")).count())
+                .as("a second block is debris — one write must leave exactly one begin marker")
+                .isEqualTo(1);
+            assertThat(content.lines().filter(line -> line.contains("<!-- ccx:end -->")).count())
+                .as("a second block is debris — one write must leave exactly one end marker")
+                .isEqualTo(1);
+            assertThat(content)
+                .as("both generations of managed content must be gone")
+                .doesNotContain("first.md")
+                .doesNotContain("second.md")
+                .contains("@~/.claude/stacks/java.md");
+            assertThat(content)
+                .as("user content around and between the blocks must survive")
+                .contains("# My Project")
+                .contains("Between the blocks.")
+                .contains("After both.");
+            assertThat(content.indexOf("<!-- ccx:begin -->"))
+                .as("the surviving block must stay where the first block was, before the user's interleaved text")
+                .isLessThan(content.indexOf("Between the blocks."));
+        }
+
+        @Test
+        @DisplayName("should close an unterminated block and reclaim its content")
+        void writeMarkerBlock_beginWithoutEnd_isClosed() throws Exception {
+            var claudeMd = tempDir.resolve("CLAUDE.md");
+            Files.writeString(claudeMd, """
+                # My Project
+
+                Before block.
+
+                <!-- ccx:begin -->
+                @~/.claude/stacks/truncated.md
+                """);
+
+            service.writeMarkerBlock(claudeMd, List.of("@~/.claude/stacks/java.md"));
+
+            var content = Files.readString(claudeMd);
+            assertThat(content.lines().filter(line -> line.contains("<!-- ccx:begin -->")).count())
+                .isEqualTo(1);
+            assertThat(content.lines().filter(line -> line.contains("<!-- ccx:end -->")).count())
+                .as("an interrupted write left the block open — the next write must close it")
+                .isEqualTo(1);
+            assertThat(content.indexOf("<!-- ccx:begin -->"))
+                .isLessThan(content.indexOf("<!-- ccx:end -->"));
+            assertThat(content)
+                .as("the unterminated block held managed content, so it is replaced, not kept")
+                .doesNotContain("truncated.md")
+                .contains("@~/.claude/stacks/java.md")
+                .contains("Before block.");
+        }
+
+        @Test
+        @DisplayName("should stay idempotent: writing the same lines twice yields the same file")
+        void writeMarkerBlock_repeatedWrite_isIdempotent() throws Exception {
+            var claudeMd = tempDir.resolve("CLAUDE.md");
+            Files.writeString(claudeMd, "# My Project\n\nExisting content.\n");
+            var stack = List.of("@~/.claude/stacks/java.md");
+
+            service.writeMarkerBlock(claudeMd, stack);
+            var afterFirst = Files.readString(claudeMd);
+            service.writeMarkerBlock(claudeMd, stack);
+
+            assertThat(Files.readString(claudeMd))
+                .as("a repeated apply must not drift the file — no marker or blank-line accretion")
+                .isEqualTo(afterFirst);
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // readMarkerBlock()
     // -----------------------------------------------------------------------
 
@@ -189,6 +288,29 @@ class ClaudeMdServiceTest {
             assertThat(lines)
                 .as("readMarkerBlock with unclosed begin marker must return lines collected up to EOF")
                 .contains("@~/.claude/stacks/java.md");
+        }
+
+        @Test
+        @DisplayName("should return only the first block when the file carries several")
+        void readMarkerBlock_severalBlocks_returnsOnlyTheFirst() throws Exception {
+            var claudeMd = tempDir.resolve("CLAUDE.md");
+            Files.writeString(claudeMd, """
+                <!-- ccx:begin -->
+                @~/.claude/stacks/first.md
+                <!-- ccx:end -->
+
+                Between.
+
+                <!-- ccx:begin -->
+                @~/.claude/stacks/second.md
+                <!-- ccx:end -->
+                """);
+
+            var lines = service.readMarkerBlock(claudeMd);
+
+            assertThat(lines)
+                .as("merging two blocks would report a stack the profile never declared")
+                .containsExactly("@~/.claude/stacks/first.md");
         }
 
         @Test

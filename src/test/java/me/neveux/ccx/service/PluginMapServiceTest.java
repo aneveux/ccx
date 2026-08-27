@@ -186,6 +186,28 @@ class PluginMapServiceTest {
                 .isPresent()
                 .hasValue("java@my-market");
         }
+
+        @Test
+        @DisplayName("should rebuild rather than NPE when a fresh-looking cache has no entries field")
+        void resolve_rebuildsCacheWhenEntriesFieldMissing() throws Exception {
+            var marketplaceDir = tempDir.resolve("marketplace");
+            Files.createDirectories(marketplaceDir.resolve("java"));
+            var settings = new Settings().withExtraKnownMarketplaces(
+                List.of(new MarketplaceSource("my-market", marketplaceDir.toString(), null, null)));
+
+            var claudeDir = tempDir.resolve(".claude");
+            Files.createDirectories(claudeDir);
+            // A truncated cache, or one from a version that omitted the field: recent timestamp, no entries.
+            Files.writeString(claudeDir.resolve("plugin-map-cache.json"),
+                "{\"generatedAt\":\"" + Instant.now() + "\"}", StandardCharsets.UTF_8);
+
+            var result = service.resolve("java", tempDir, settings);
+
+            assertThat(result)
+                .as("a cache with null entries is unusable, not fresh — resolve must rebuild instead of throwing")
+                .isPresent()
+                .hasValue("java@my-market");
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -17,8 +17,9 @@ import java.util.List;
  *
  * <p>Everything between the two HTML-comment markers is owned by ccx and replaced on each
  * profile enable/disable. Content outside the markers is left untouched. If no markers
- * exist, a new block is appended at the end of the file. Malformed marker pairs (end
- * before begin) are detected and cleaned up automatically.
+ * exist, a new block is appended at the end of the file. A file that somehow ends up with
+ * several blocks, an unterminated block, or an inverted pair (end before begin) is
+ * normalised back to exactly one well-formed block on the next write.
  *
  * <p>All writes are atomic via {@link me.neveux.ccx.util.FileUtils#atomicWrite}.
  */
@@ -31,9 +32,13 @@ public class ClaudeMdService {
     private static final String END_MARKER = "<!-- ccx:end -->";
 
     /**
-     * Returns the lines currently inside the {@code <!-- ccx:begin -->} block of the
+     * Returns the lines inside the <em>first</em> {@code <!-- ccx:begin -->} block of the
      * given CLAUDE.md file, with the marker lines themselves excluded. Returns an empty
      * list if the file does not exist, cannot be read, or contains no ccx markers.
+     *
+     * <p>Only the first block is read: it is the one {@link #writeMarkerBlock} keeps. Any
+     * further block is debris and is reported as absent so callers never see a merge of
+     * two generations of managed content. A block with no end marker extends to EOF.
      *
      * @param claudeMdFile path to the CLAUDE.md file (typically {@code .claude/CLAUDE.md})
      * @return the lines between the ccx markers; never null
@@ -47,17 +52,16 @@ public class ClaudeMdService {
             var inside = false;
             var result = new ArrayList<String>();
             for (var line : lines) {
-                if (line.contains(BEGIN_MARKER)) {
-                    inside = true;
+                if (!inside) {
+                    if (line.contains(BEGIN_MARKER)) {
+                        inside = true;
+                    }
                     continue;
                 }
                 if (line.contains(END_MARKER)) {
-                    inside = false;
-                    continue;
+                    return result;
                 }
-                if (inside) {
-                    result.add(line);
-                }
+                result.add(line);
             }
             return result;
         } catch (IOException e) {
@@ -67,10 +71,12 @@ public class ClaudeMdService {
     }
 
     /**
-     * Replaces the content of the ccx block in {@code claudeMdFile} with {@code stackLines}.
-     * If the file does not exist, it is created containing only the ccx block. If no
-     * markers are present, the block is appended at the end. Malformed markers (end before
-     * begin) are stripped and a clean block is appended.
+     * Replaces the content of the ccx block in {@code claudeMdFile} with {@code stackLines},
+     * leaving the file with exactly one well-formed block. If the file does not exist, it is
+     * created containing only the ccx block. If no markers are present, the block is appended
+     * at the end. Every marker line and every line inside a managed block is dropped first, so
+     * duplicated, unterminated, or inverted blocks collapse into the single block written here,
+     * at the position the first begin marker held.
      *
      * @param claudeMdFile path to the CLAUDE.md file (typically {@code .claude/CLAUDE.md})
      * @param stackLines   the lines to write between the ccx markers; must not be null
@@ -85,46 +91,21 @@ public class ClaudeMdService {
                 return;
             }
 
-            var existing = Files.readAllLines(claudeMdFile);
-            var beginIdx = -1;
-            var endIdx = -1;
-            for (int i = 0; i < existing.size(); i++) {
-                if (existing.get(i).contains(BEGIN_MARKER)) beginIdx = i;
-                if (existing.get(i).contains(END_MARKER)) endIdx = i;
-            }
-
-            List<String> source = existing;
-            if (beginIdx != -1 && endIdx != -1 && beginIdx >= endIdx) {
-                // Malformed: end marker appears before begin marker. Strip every marker
-                // line and any content trapped between the inverted markers, then append
-                // a single well-formed block below.
-                var cleaned = new ArrayList<String>();
-                for (int i = 0; i < existing.size(); i++) {
-                    if (i >= endIdx && i <= beginIdx) continue;
-                    cleaned.add(existing.get(i));
-                }
-                source = cleaned;
-                beginIdx = -1;
-                endIdx = -1;
-            }
-
-            List<String> output;
-            if (beginIdx == -1 || endIdx == -1) {
-                // No markers — append block at end
-                output = new ArrayList<>(source);
+            var stripped = stripManagedBlocks(Files.readAllLines(claudeMdFile));
+            var output = new ArrayList<>(stripped.lines());
+            var insertAt = stripped.insertAt();
+            if (insertAt == -1) {
                 if (!output.isEmpty() && !output.get(output.size() - 1).isBlank()) {
                     output.add("");
                 }
-                output.add(BEGIN_MARKER);
-                output.addAll(stackLines);
-                output.add(END_MARKER);
-            } else {
-                // Replace content between markers
-                output = new ArrayList<>();
-                output.addAll(existing.subList(0, beginIdx + 1)); // up to and including begin marker
-                output.addAll(stackLines);
-                output.addAll(existing.subList(endIdx, existing.size())); // from end marker onwards
+                insertAt = output.size();
             }
+
+            var block = new ArrayList<String>();
+            block.add(BEGIN_MARKER);
+            block.addAll(stackLines);
+            block.add(END_MARKER);
+            output.addAll(insertAt, block);
 
             var updated = String.join("\n", output) + "\n";
             FileUtils.atomicWrite(claudeMdFile, updated);
@@ -132,6 +113,68 @@ public class ClaudeMdService {
         } catch (IOException e) {
             throw new ConfigWriteException("Failed to write CLAUDE.md at " + claudeMdFile, e);
         }
+    }
+
+    /**
+     * The user-owned lines of a CLAUDE.md, plus where the managed block belongs.
+     *
+     * @param lines    every line ccx does not own, in order
+     * @param insertAt index into {@code lines} where the first begin marker stood, or -1 when
+     *                 the file carried no begin marker and the block has to be appended
+     */
+    private record StrippedContent(List<String> lines, int insertAt) {}
+
+    private static StrippedContent stripManagedBlocks(List<String> existing) {
+        var lines = repairInvertedMarkers(existing);
+        var kept = new ArrayList<String>();
+        var insertAt = -1;
+        var inside = false;
+        for (var line : lines) {
+            if (inside) {
+                if (line.contains(END_MARKER)) {
+                    inside = false;
+                }
+                continue;
+            }
+            if (line.contains(BEGIN_MARKER)) {
+                inside = true;
+                if (insertAt == -1) {
+                    insertAt = kept.size();
+                }
+                continue;
+            }
+            if (line.contains(END_MARKER)) {
+                continue;
+            }
+            kept.add(line);
+        }
+        return new StrippedContent(kept, insertAt);
+    }
+
+    /**
+     * Drops the debris of an interrupted write: an end marker with no begin marker before it,
+     * together with everything up to and including the next begin marker. What sits between an
+     * inverted pair is a previous generation of managed content, not something the user typed.
+     */
+    private static List<String> repairInvertedMarkers(List<String> lines) {
+        var firstBegin = indexOfMarker(lines, BEGIN_MARKER);
+        var firstEnd = indexOfMarker(lines, END_MARKER);
+        if (firstEnd == -1 || (firstBegin != -1 && firstBegin < firstEnd)) {
+            return lines;
+        }
+        var lastDropped = firstBegin != -1 ? firstBegin : firstEnd;
+        var repaired = new ArrayList<>(lines);
+        repaired.subList(firstEnd, lastDropped + 1).clear();
+        return repaired;
+    }
+
+    private static int indexOfMarker(List<String> lines, String marker) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains(marker)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private String buildBlock(List<String> lines) {

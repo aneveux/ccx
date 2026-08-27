@@ -387,4 +387,87 @@ class SettingsSerdeTest {
                 .isNull();
         }
     }
+
+    @Nested
+    @DisplayName("when nested objects carry keys ccx does not model")
+    class WhenNestedUnknownKeys {
+
+        @Test
+        @DisplayName("permissions keys ccx does not model survive a write/read round-trip")
+        void permissions_unknownKeys_surviveRoundTrip(@TempDir Path tempDir) throws Exception {
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            Files.writeString(settingsFile, """
+                {
+                  "permissions": {
+                    "allow": ["Bash(mvn:*)"],
+                    "defaultMode": "acceptEdits",
+                    "additionalDirectories": ["../shared"]
+                  }
+                }
+                """);
+            var service = new SettingsService();
+
+            var loaded = service.read(tempDir);
+            service.write(loaded.withPermissions(loaded.permissions().withAllow(List.of("Bash(mvn:*)", "Bash(git:*)"))),
+                tempDir);
+
+            var json = mapper.readTree(settingsFile.toFile());
+            assertThat(json.path("permissions").path("defaultMode").asText())
+                .as("Claude Code owns permissions.defaultMode — a ccx write must not drop it")
+                .isEqualTo("acceptEdits");
+            assertThat(json.path("permissions").path("additionalDirectories").isArray()).isTrue();
+            assertThat(json.path("permissions").path("allow").toString()).contains("Bash(git:*)");
+        }
+
+        @Test
+        @DisplayName("mcpServers keys ccx does not model survive a write/read round-trip")
+        void mcpServers_unknownKeys_surviveRoundTrip(@TempDir Path tempDir) throws Exception {
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            Files.writeString(settingsFile, """
+                {
+                  "mcpServers": {
+                    "github": {
+                      "type": "http",
+                      "url": "https://api.example.test/mcp",
+                      "headers": {"Authorization": "Bearer ${TOKEN}"},
+                      "env": {"HOME_OVERRIDE": "/tmp"}
+                    }
+                  }
+                }
+                """);
+            var service = new SettingsService();
+
+            var loaded = service.read(tempDir);
+            service.write(loaded, tempDir);
+
+            var server = mapper.readTree(settingsFile.toFile()).path("mcpServers").path("github");
+            assertThat(server.path("headers").path("Authorization").asText())
+                .as("an MCP server's headers are not modelled by ccx but must round-trip")
+                .isEqualTo("Bearer ${TOKEN}");
+            assertThat(server.path("env").path("HOME_OVERRIDE").asText()).isEqualTo("/tmp");
+            assertThat(server.path("url").asText()).isEqualTo("https://api.example.test/mcp");
+        }
+
+        @Test
+        @DisplayName("an MCP server's modelled-but-absent fields are not written back as nulls")
+        void mcpServers_absentFields_areNotSerializedAsNull(@TempDir Path tempDir) throws Exception {
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.createDirectories(settingsFile.getParent());
+            Files.writeString(settingsFile, """
+                {"mcpServers": {"local": {"command": "npx", "args": ["-y", "server"]}}}
+                """);
+            var service = new SettingsService();
+
+            service.write(service.read(tempDir), tempDir);
+
+            var server = mapper.readTree(settingsFile.toFile()).path("mcpServers").path("local");
+            assertThat(server.has("url"))
+                .as("writing url:null would make Claude Code read a stdio server as a broken http one")
+                .isFalse();
+            assertThat(server.has("type")).isFalse();
+            assertThat(server.path("command").asText()).isEqualTo("npx");
+        }
+    }
 }

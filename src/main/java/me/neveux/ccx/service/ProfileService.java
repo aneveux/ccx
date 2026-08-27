@@ -23,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Loads, resolves, and introspects ccx profiles stored under the ccx profiles directory
@@ -38,6 +39,13 @@ import java.util.Set;
 public class ProfileService {
 
     private static final Logger log = LoggerFactory.getLogger(ProfileService.class);
+
+    /**
+     * Profile names addressable on disk, matching the guard in
+     * {@link CcxConfigService#profileDir(String)}: a name outside this set cannot be turned into a
+     * path at all, so it is filtered out or reported rather than allowed to reach the filesystem.
+     */
+    private static final Pattern VALID_PROFILE_NAME = Pattern.compile("[a-z0-9-]+");
 
     private final ObjectMapper yamlMapper;
     private final CcxConfigService ccxConfigService;
@@ -95,6 +103,10 @@ public class ProfileService {
                 var yaml = dir.resolve("profile.yaml");
                 if (Files.exists(yaml)) {
                     var dirName = dir.getFileName().toString();
+                    if (!isValidProfileName(dirName)) {
+                        log.warn("skipping profile directory with unusable name name={} path={}", dirName, dir);
+                        return;
+                    }
                     try {
                         var profile = yamlMapper.readValue(yaml.toFile(), Profile.class);
                         result.put(dirName, profile);
@@ -125,48 +137,47 @@ public class ProfileService {
         if (profile == null) {
             throw new ProfileNotFoundException(name);
         }
-        return resolve(profile, registry);
+        return resolve(name, profile, registry);
     }
 
-    Profile resolve(Profile profile, Map<String, Profile> registry) {
-        var visited = new HashSet<String>();
-        return resolveRecursive(profile, registry, visited);
+    /**
+     * Resolves {@code profile}'s inheritance chain, tracking cycles by registry key.
+     *
+     * @param key      the registry key {@code profile} is filed under — the identity cycle
+     *                 detection uses, since {@code metadata.name} is user-editable, may be
+     *                 duplicated across profiles, and may be absent entirely
+     * @param profile  the profile to resolve
+     * @param registry every known profile, keyed by directory name
+     */
+    Profile resolve(String key, Profile profile, Map<String, Profile> registry) {
+        return resolveRecursive(key, profile, registry, new HashSet<>());
     }
 
-    private Profile resolveRecursive(Profile profile, Map<String, Profile> registry, Set<String> visited) {
-        var name = profile.metadata() != null ? profile.metadata().name() : null;
-        if (name != null) {
-            if (visited.contains(name)) {
-                throw new ProfileCycleException("Cycle detected at profile: " + name + " visited=" + visited);
+    private Profile resolveRecursive(String key, Profile profile, Map<String, Profile> registry, Set<String> visited) {
+        if (!visited.add(key)) {
+            throw new ProfileCycleException("Cycle detected at profile: " + key + " visited=" + visited);
+        }
+        try {
+            if (profile.extend() == null || profile.extend().isEmpty()) {
+                return profile;
             }
-            visited.add(name);
-        }
 
-        if (profile.extend() == null || profile.extend().isEmpty()) {
-            if (name != null) visited.remove(name);
-            return profile;
-        }
-
-        Profile merged = null;
-        for (var parentName : profile.extend()) {
-            var parent = registry.get(parentName);
-            if (parent == null) {
-                throw new ProfileNotFoundException("Parent profile '" + parentName + "' not found while resolving '" + name + "'. Verify the profile YAML's 'extends' field.");
+            Profile merged = null;
+            for (var parentName : profile.extend()) {
+                var parent = registry.get(parentName);
+                if (parent == null) {
+                    throw new ProfileNotFoundException("Parent profile '" + parentName + "' not found while resolving '" + key + "'. Verify the profile YAML's 'extends' field.");
+                }
+                var resolvedParent = resolveRecursive(parentName, parent, registry, visited);
+                merged = merged == null ? resolvedParent : mergeProfiles(merged, resolvedParent);
             }
-            var resolvedParent = resolveRecursive(parent, registry, visited);
-            if (merged == null) {
-                merged = resolvedParent;
-            } else {
-                merged = mergeProfiles(merged, resolvedParent);
-            }
-        }
 
-        if (name != null) visited.remove(name);
-
-        if (merged == null) {
-            return profile;
+            return merged == null ? profile : mergeProfiles(merged, profile);
+        } finally {
+            // A profile reached twice through different branches of a diamond is legal;
+            // only a profile still on the current path is a cycle.
+            visited.remove(key);
         }
-        return mergeProfiles(merged, profile);
     }
 
     private Profile mergeProfiles(Profile ancestor, Profile child) {
@@ -253,6 +264,10 @@ public class ProfileService {
         if (!inProgress.add(name)) {
             throw new ProfileCycleException("Cycle detected at profile: " + name + " visited=" + inProgress);
         }
+        if (!isValidProfileName(name)) {
+            throw new ProfileLoadException("Invalid profile name in an 'extends' chain: '" + name
+                + "'. Profile names must match [a-z0-9-]+ — fix the 'extends' entry that references it.");
+        }
         Profile profile = null;
         try {
             profile = load(name);
@@ -286,11 +301,28 @@ public class ProfileService {
                 .filter(dir -> Files.exists(dir.resolve("profile.yaml")))
                 .map(Path::getFileName)
                 .map(Path::toString)
+                .filter(name -> {
+                    if (isValidProfileName(name)) return true;
+                    log.warn("skipping profile directory with unusable name name={}", name);
+                    return false;
+                })
                 .sorted()
                 .toList();
         } catch (IOException e) {
             throw new ProfileLoadException("Failed to list profiles from: " + profilesDir, e);
         }
+    }
+
+    /**
+     * Whether {@code name} can be used as a profile name: only these names resolve to a directory
+     * under the profiles root, so listings drop everything else and the {@code extends} walk
+     * reports it instead of letting the path guard throw.
+     *
+     * @param name candidate profile name, possibly a raw directory name or an {@code extends} entry
+     * @return {@code true} when {@code name} is non-null and matches {@code [a-z0-9-]+}
+     */
+    public static boolean isValidProfileName(String name) {
+        return name != null && VALID_PROFILE_NAME.matcher(name).matches();
     }
 
 }

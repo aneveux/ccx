@@ -12,8 +12,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Clones and updates marketplace git repositories into the local cache directory
@@ -36,18 +38,29 @@ public class MarketplaceCloneService {
     /** How long a fetched marketplace clone stays fresh before a refresh is due. */
     public static final Duration CACHE_TTL = Duration.ofDays(7);
 
+    /** File inside a cache directory recording which GitHub repository the clone came from. */
+    private static final String REPO_MARKER = ".ccx-repo";
+
+    /** Characters a marketplace key may consist of; anything else could escape the cache root. */
+    private static final Pattern VALID_KEY = Pattern.compile("[A-Za-z0-9._-]+");
+
     public MarketplaceCloneService() {}
 
     /**
      * Returns the local cache directory for the marketplace identified by {@code key}
      * ({@code ~/.cache/ccx/marketplaces/<key>}). The directory may not exist yet.
      *
-     * @param key marketplace key; must not contain path separators or null bytes
+     * <p>Keys are allowlisted to {@code [A-Za-z0-9._-]+} rather than merely screened for
+     * separators: an empty key or a bare {@code .} would otherwise resolve to the shared cache
+     * root itself, so a refresh would treat every cached marketplace as one clone.
+     *
+     * @param key marketplace key; must be non-empty, match {@code [A-Za-z0-9._-]+}, and be
+     *            neither {@code .} nor {@code ..}
      * @return the cache directory path
      * @throws IllegalArgumentException if {@code key} is null or contains disallowed characters
      */
     public Path localCacheDir(String key) {
-        if (key == null || key.contains("/") || key.contains("\\") || key.contains("..") || key.indexOf('\0') >= 0) {
+        if (key == null || !VALID_KEY.matcher(key).matches() || key.equals(".") || key.equals("..")) {
             throw new IllegalArgumentException("invalid marketplace key: " + key);
         }
         return Path.of(System.getProperty("user.home"), ".cache", "ccx", "marketplaces", key);
@@ -99,6 +112,7 @@ public class MarketplaceCloneService {
             return Path.of(source.path());
         }
         var cacheDir = localCacheDir(source.key());
+        discardForeignClone(cacheDir, source.key(), source.githubRepo());
         if (Files.isDirectory(cacheDir) && isFresh(source.key())) {
             log.debug("marketplace cache fresh key={}", source.key());
             return cacheDir;
@@ -110,7 +124,7 @@ public class MarketplaceCloneService {
             log.debug("marketplace cache absent, cloning key={} repo={}", source.key(), source.githubRepo());
             clone(source.githubRepo(), cacheDir);
         }
-        writeTimestamp(source.key());
+        recordFetch(source.key(), source.githubRepo());
         return cacheDir;
     }
 
@@ -124,12 +138,52 @@ public class MarketplaceCloneService {
     public void refresh(MarketplaceSource source) throws IOException {
         if (!"github".equals(source.sourceType())) return;
         var cacheDir = localCacheDir(source.key());
+        discardForeignClone(cacheDir, source.key(), source.githubRepo());
         if (Files.isDirectory(cacheDir)) {
             pull(cacheDir);
         } else {
             clone(source.githubRepo(), cacheDir);
         }
-        writeTimestamp(source.key());
+        recordFetch(source.key(), source.githubRepo());
+    }
+
+    /**
+     * Deletes {@code cacheDir} unless it is a clone of {@code githubRepo}, so that a mismatch
+     * results in a fresh clone rather than a reuse.
+     *
+     * <p>The cache is shared by every project on the machine while the key that addresses it comes
+     * from whichever {@code settings.json} declared the marketplace. Without this check a project
+     * could point a well-known key at its own repository and have every other project on the
+     * machine resolve plugins from it. A clone with no recorded provenance (written by a ccx
+     * predating the marker, or interrupted mid-clone) is discarded for the same reason.
+     */
+    private void discardForeignClone(Path cacheDir, String key, String githubRepo) throws IOException {
+        if (!Files.isDirectory(cacheDir)) return;
+        var recorded = recordedRepo(cacheDir);
+        if (githubRepo != null && githubRepo.equals(recorded)) return;
+        log.warn("marketplace cache key={} holds a clone of {} but {} is declared — discarding it",
+            key, recorded != null ? recorded : "an unrecorded repository", githubRepo);
+        deleteRecursively(cacheDir);
+    }
+
+    /** The repository a cached clone was created from, or {@code null} when it is not recorded. */
+    private static String recordedRepo(Path cacheDir) {
+        var marker = cacheDir.resolve(REPO_MARKER);
+        if (!Files.isRegularFile(marker)) return null;
+        try {
+            return Files.readString(marker).strip();
+        } catch (IOException e) {
+            log.warn("could not read marketplace repo marker path={}", marker, e);
+            return null;
+        }
+    }
+
+    private static void deleteRecursively(Path dir) throws IOException {
+        try (var paths = Files.walk(dir)) {
+            for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        }
     }
 
     static final int GIT_TIMEOUT_SECONDS = 120;
@@ -160,8 +214,16 @@ public class MarketplaceCloneService {
         runGitCommand(List.of("git", "-C", dir.toString(), "pull", "--ff-only"));
     }
 
-    private void writeTimestamp(String key) throws IOException {
-        var stampFile = localCacheDir(key).resolve(".ccx-fetched");
-        FileUtils.atomicWrite(stampFile, Instant.now().toString());
+    /**
+     * Records a successful fetch: the timestamp {@link #isFresh} reads, plus the repository the
+     * clone came from so a later call can tell the cache entry apart from a different repository
+     * claiming the same key.
+     */
+    private void recordFetch(String key, String githubRepo) throws IOException {
+        var cacheDir = localCacheDir(key);
+        FileUtils.atomicWrite(cacheDir.resolve(".ccx-fetched"), Instant.now().toString());
+        if (githubRepo != null) {
+            FileUtils.atomicWrite(cacheDir.resolve(REPO_MARKER), githubRepo + "\n");
+        }
     }
 }

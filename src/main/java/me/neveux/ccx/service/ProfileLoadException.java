@@ -1,13 +1,19 @@
 package me.neveux.ccx.service;
 
 /**
- * Thrown when a {@code profile.yaml} file exists but cannot be parsed — for example,
- * due to a YAML syntax error or an unrecognised field that prevents deserialization.
+ * Thrown when a profile cannot be loaded — a {@code profile.yaml} that exists but cannot be
+ * parsed (YAML syntax error, unrecognised field), or a name that cannot address a profile
+ * directory at all.
  *
- * <p>Wraps the underlying {@link java.io.IOException} from the YAML mapper.
+ * <p>Usually wraps the underlying {@link java.io.IOException} from the YAML mapper; a name that
+ * fails validation has no cause to wrap.
  */
 public class ProfileLoadException extends RuntimeException {
     public ProfileLoadException(String message, Throwable cause) {
         super(message, cause);
+    }
+
+    public ProfileLoadException(String message) {
+        super(message);
     }
 }

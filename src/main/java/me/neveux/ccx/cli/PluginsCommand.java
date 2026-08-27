@@ -216,7 +216,7 @@ public class PluginsCommand implements Runnable {
         public Integer call() {
             var dir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
-            var settings = settingsService.read(dir);
+            var settings = settingsService.readForUpdate(dir);
 
             var resolved = pluginMapService.resolve(name, dir, settings);
             String qualifiedName;
@@ -339,7 +339,7 @@ public class PluginsCommand implements Runnable {
         public Integer call() {
             var projDir = CommandUtil.resolveProjectDir(projectDir);
             if (!CommandUtil.checkPathSecurity(projDir, spec)) return 1;
-            var settings = settingsService.read(projDir);
+            var settings = settingsService.readForUpdate(projDir);
 
             if (settings.enabledPlugins() == null) {
                 spec.commandLine().getOut().println(
