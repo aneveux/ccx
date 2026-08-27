@@ -21,12 +21,15 @@ Key services:
 - `PluginMapService` — discovers and maps plugin short names to qualified keys from marketplace directories
 - `SkillsService` — discovers skills from configured marketplace paths
 - `MarketplaceCloneService` — clones/pulls marketplace plugin repositories for offline discovery
+- `ClaudePluginRegistryService` — read-only view of Claude Code's `~/.claude/plugins/installed_plugins.json`: which enabled plugins are actually installed for a project (see ADR-015)
+- `ClaudePluginInstallService` — runs `claude plugin install <plugin>@<marketplace> --scope project` in the project directory; never throws, reports a status instead
 
 ### Model (`me.neveux.ccx.model`)
 Jackson-annotated records/POJOs for serialization. No business logic. Key types: `Settings`, `Profile`, `CcxContext`, `CcxContext.ProfileSnapshot`, `Permissions`, `McpServer`.
 `Settings` uses an inner `Builder` class for deserialization (`@JsonDeserialize(builder=Settings.Builder.class)` + `@JsonPOJOBuilder(withPrefix="")`) to support `@JsonAnySetter` passthrough of unknown fields — records cannot carry `@JsonAnySetter` directly. Both `Settings` and `Settings.Builder` are annotated `@RegisterForReflection` (inner classes require a separate annotation for GraalVM native).
 Marketplace cluster: `MarketplaceManifest`, `MarketplacePlugin`, `MarketplaceSource`
 (with custom `MarketplaceSourceSerializer`/`Deserializer`), `PluginMapCache`.
+Claude Code plugin registry (read-only): `ClaudePluginRegistry`, `ClaudePluginInstall`.
 Profile sub-records: `ProfileMetadata`, `ProfilePlugins`, `ProfileClaudeMd`.
 Context sub-record: `CcxContext.ProfileRecord`.
 
@@ -37,6 +40,7 @@ Tamboui-based interactive terminal dashboard launched by `TuiCommand`. Architect
 - `CcxApp` — top-level Tamboui application; owns `TuiState` and `TuiActions`; dispatches key events
 - `TuiState` — mutable state: active tab, selected rows, filter focus, snapshot reference
 - `TuiActions` — non-CDI plain Java object; the only TUI class that mutates project state; delegates to services
+- `PluginInstallController` — dispatches `claude plugin install` to a single background daemon thread so the render thread never blocks on a subprocess; publishes progress to the footer and flags a snapshot rebuild when done
 - `FilterState` — per-tab filter state wrapping Tamboui `TextInputState`
 - Tab classes (`tabs/`) — pure renderers implementing `FilterableTab<T>`; no service injection; no state mutation
 
@@ -47,7 +51,10 @@ Tamboui-based interactive terminal dashboard launched by `TuiCommand`. Architect
 Stateless static helpers: `FileUtils.atomicWrite` (write-to-.tmp then `Files.move ATOMIC_MOVE`),
 `ListUtils.orderedUnion` (null-safe ordered dedup of two lists), and
 `IgnorePatterns.toReadDenyRule` (profile `ignore:` pattern → `permissions.deny` rule, shared by
-`ProfileApplyService` and `CcxContextService` so apply and drift detection cannot disagree).
+`ProfileApplyService` and `CcxContextService` so apply and drift detection cannot disagree), and
+`ProcessRunner.run` (hardened subprocess execution: argv list never a shell string, merged stderr,
+virtual-thread output drain to avoid a pipe-buffer deadlock, bounded timeout + `destroyForcibly`;
+shared by `MarketplaceCloneService` and `ClaudePluginInstallService`).
 
 ### Config (`me.neveux.ccx.config`)
 CDI producer class `ObjectMapperConfig`: produces `@Named("jsonMapper")` (Jackson JSON) and
@@ -58,12 +65,15 @@ CDI producer class `ObjectMapperConfig`: produces `@Named("jsonMapper")` (Jackso
 
 ```
 cli/
-  ProfilesCommand    → ProfileApplyService, CcxContextService, ProfileService, CcxConfigService, SettingsService
-  PluginsCommand     → SettingsService, PluginMapService, MarketplaceCloneService
+  ProfilesCommand    → ProfileApplyService, CcxContextService, ProfileService, CcxConfigService, SettingsService,
+                        ClaudePluginRegistryService, ClaudePluginInstallService
+  PluginsCommand     → SettingsService, PluginMapService, MarketplaceCloneService,
+                        ClaudePluginRegistryService, ClaudePluginInstallService
   SkillsCommand      → SettingsService, SkillsService
   McpCommand         → SettingsService
   ClaudeMdCommand    → ClaudeMdService, CcxConfigService
-  DoctorCommand      → SettingsService, PluginMapService, ClaudeMdService, CcxConfigService, ProfileService, CcxContextService
+  DoctorCommand      → SettingsService, PluginMapService, ClaudeMdService, CcxConfigService, ProfileService,
+                        CcxContextService, ClaudePluginRegistryService
   StatusCommand      → SettingsService, ClaudeMdService
   CleanCommand       → SettingsService, ClaudeMdService
   ConfigCommand      → CcxConfigService
@@ -79,6 +89,8 @@ service/
   ClaudeMdService       (no service deps — filesystem only)
   SkillsService         → SettingsService
   PluginMapService      → MarketplaceCloneService (Jackson + filesystem)
+  ClaudePluginRegistryService  (no service deps — Jackson + filesystem, read-only)
+  ClaudePluginInstallService   → ProcessRunner (spawns the `claude` CLI)
 
 tui/
   TuiDataService     → SettingsService, ClaudeMdService, CcxContextService,
@@ -86,6 +98,8 @@ tui/
   TuiActions         → SettingsService, ClaudeMdService, TuiDataService,
                         ProfileApplyService, CcxContextService, ProfileService
   CcxApp             (plain Java; constructed by TuiCommand with injected services)
+  PluginInstallController → SettingsService, ClaudePluginRegistryService, ClaudePluginInstallService
+                     (plain Java; owned by CcxApp; runs installs off the render thread)
   tabs/FilterableTab (abstract; implemented by 4 list-tab classes — no service deps)
                      (OverviewTab is a standalone final class; it does not extend FilterableTab)
 ```

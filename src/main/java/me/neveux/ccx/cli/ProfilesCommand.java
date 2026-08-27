@@ -3,6 +3,8 @@ package me.neveux.ccx.cli;
 import me.neveux.ccx.model.ProfileDriftState;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
+import me.neveux.ccx.service.ClaudePluginInstallService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.util.FileUtils;
 import me.neveux.ccx.service.ProfileApplyService;
 import me.neveux.ccx.service.ProfileNotFoundException;
@@ -210,6 +212,15 @@ public class ProfilesCommand implements Runnable {
         @Inject
         ProfileService profileService;
 
+        @Inject
+        SettingsService settingsService;
+
+        @Inject
+        ClaudePluginRegistryService claudePluginRegistryService;
+
+        @Inject
+        ClaudePluginInstallService claudePluginInstallService;
+
         @Parameters(index = "0", description = "Profile name")
         String name;
 
@@ -261,6 +272,10 @@ public class ProfilesCommand implements Runnable {
                     out.println("Enabled profile: " + name);
                 }
                 out.flush();
+                // The profile's plugins are now enabled in settings.json; Claude Code still needs
+                // them installed. A failure here is warned about, not fatal — the enablement stands
+                // and `ccx plugins sync` repairs it.
+                installProfilePlugins(dir);
                 return 0;
             } catch (ProfileNotFoundException e) {
                 spec.commandLine().getErr().println("Profile '" + name + "' not found. Run `ccx profiles list` to see available profiles, or `ccx profiles new " + name + "` to create one.");
@@ -269,6 +284,11 @@ public class ProfilesCommand implements Runnable {
                 spec.commandLine().getErr().println("Failed to record profile state (context.json may be corrupted): " + e.getMessage());
                 return 1;
             }
+        }
+
+        private void installProfilePlugins(Path dir) {
+            PluginsCommand.installMissingPlugins(claudePluginRegistryService, claudePluginInstallService,
+                settingsService.read(dir), dir, spec, false);
         }
     }
 
@@ -338,6 +358,15 @@ public class ProfilesCommand implements Runnable {
         @Inject
         ProfileService profileService;
 
+        @Inject
+        SettingsService settingsService;
+
+        @Inject
+        ClaudePluginRegistryService claudePluginRegistryService;
+
+        @Inject
+        ClaudePluginInstallService claudePluginInstallService;
+
         @Parameters(index = "0", description = "Profile name")
         String name;
 
@@ -370,6 +399,8 @@ public class ProfilesCommand implements Runnable {
                 var out = spec.commandLine().getOut();
                 out.println("Reinstalled profile: " + name);
                 out.flush();
+                PluginsCommand.installMissingPlugins(claudePluginRegistryService, claudePluginInstallService,
+                    settingsService.read(dir), dir, spec, false);
                 return 0;
             } catch (ProfileNotFoundException e) {
                 spec.commandLine().getErr().println("Profile '" + name + "' not found. Run `ccx profiles list` to see available profiles, or `ccx profiles new " + name + "` to create one.");

@@ -106,11 +106,30 @@ defaults to cwd). Read-only commands that resolve global config also accept
 | Subcommand              | Description                                      |
 |-------------------------|--------------------------------------------------|
 | `plugins list`          | List all known plugins with status (`--tag` to filter) |
-| `plugins enable <name>` | Enable a plugin in this project                  |
+| `plugins enable <name>` | Enable a plugin in this project (and install it if needed) |
 | `plugins disable <name>`| Disable a plugin                                 |
+| `plugins sync`          | Install enabled plugins that are missing locally (`--dry-run` to preview) |
 | `plugins diff`          | Show diff between project and global plugins     |
 | `plugins tags`          | List available tag filters for `plugins list`    |
 | `plugins refresh`       | Force re-fetch GitHub marketplace sources (`--marketplace`/`-m` to target one) |
+
+#### Enablement vs installation
+
+Claude Code keeps two separate pieces of state for a plugin: it is *enabled* by
+`enabledPlugins` in `.claude/settings.json`, and it is *installed* by a record in
+`~/.claude/plugins/installed_plugins.json` plus a materialized tree under
+`~/.claude/plugins/cache/`. Enabled but not installed, Claude Code refuses to load it and
+reports `isn't installed here` or `not cached`.
+
+ccx writes the enablement and delegates the installation to
+`claude plugin install <plugin>@<marketplace> --scope project`, run in the project directory.
+Every enable path does it: `plugins enable`, `profiles enable`, `profiles reinstall`, and the
+TUI's plugin and profile toggles (in the background, so the UI never blocks). If the `claude`
+binary cannot be found or the install fails, the enablement is still written and the exact
+command to run by hand is printed. `ccx doctor` reports the gap as an error, and
+`ccx plugins sync` repairs it.
+
+Set `CCX_CLAUDE_BIN` to point at the `claude` binary when it is not on `PATH`.
 
 ### Skills subcommands
 

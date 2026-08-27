@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ccx plugins sync` installs every plugin enabled in the project that Claude Code has
+  no installation record for — the repair path for projects configured before ccx
+  installed plugins, or whose cached plugin tree was garbage-collected. `--dry-run`
+  previews without installing.
+
+### Fixed
+
+- Enabling a plugin now installs it. Claude Code tracks enablement
+  (`enabledPlugins` in `settings.json`) and installation
+  (`~/.claude/plugins/installed_plugins.json` plus the cache tree under
+  `~/.claude/plugins/cache/`) separately; ccx only ever wrote the first, so a plugin
+  enabled through ccx failed to load with `isn't installed here` or `not cached`.
+  Every enable path — `plugins enable`, `profiles enable`, `profiles reinstall`, and the
+  TUI's plugin and profile toggles — now runs
+  `claude plugin install <plugin>@<marketplace> --scope project` in the project directory
+  first. TUI installs run in the background so the UI never blocks. When the `claude`
+  binary is missing (override its location with `CCX_CLAUDE_BIN`) or the install fails,
+  the enablement is still written and the exact command to run by hand is printed.
+- `ccx doctor` reports `[ERROR] plugin enabled but not installed for this project` for
+  each such plugin and exits 1. Note the behaviour change: doctor can now fail on plugin
+  installation state.
+
 ## [0.3.2] - 2026-08-26
 
 ### Fixed

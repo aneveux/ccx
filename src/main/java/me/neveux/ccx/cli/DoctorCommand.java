@@ -4,6 +4,7 @@ import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
@@ -46,22 +47,25 @@ public class DoctorCommand implements Callable<Integer> {
     private final CcxConfigService ccxConfigService;
     private final ProfileService profileService;
     private final CcxContextService ccxContextService;
+    private final ClaudePluginRegistryService claudePluginRegistryService;
 
     DoctorCommand() {
         this(new SettingsService(), new PluginMapService(), new ClaudeMdService(), new CcxConfigService(),
-             new ProfileService(), new CcxContextService());
+             new ProfileService(), new CcxContextService(), new ClaudePluginRegistryService());
     }
 
     @Inject
     public DoctorCommand(SettingsService settingsService, PluginMapService pluginMapService,
                          ClaudeMdService claudeMdService, CcxConfigService ccxConfigService,
-                         ProfileService profileService, CcxContextService ccxContextService) {
+                         ProfileService profileService, CcxContextService ccxContextService,
+                         ClaudePluginRegistryService claudePluginRegistryService) {
         this.settingsService = settingsService;
         this.pluginMapService = pluginMapService;
         this.claudeMdService = claudeMdService;
         this.ccxConfigService = ccxConfigService;
         this.profileService = profileService;
         this.ccxContextService = ccxContextService;
+        this.claudePluginRegistryService = claudePluginRegistryService;
     }
 
     @Option(names = {"--project-dir"}, description = "Project directory (defaults to cwd)")
@@ -92,7 +96,7 @@ public class DoctorCommand implements Callable<Integer> {
         hasErrors |= settingsResult.hasError();
         hasErrors |= checkClaudeMdRefs(dir, out);
         if (settingsResult.readable()) {
-            checkPlugins(settingsResult.settings(), globalResult.settings(), out);
+            hasErrors |= checkPlugins(settingsResult.settings(), globalResult.settings(), dir, out);
             checkMcpServers(settingsResult.settings(), out);
             checkSkillOverrides(settingsResult.settings(), out);
             checkRulesDir(dir, out);
@@ -152,10 +156,17 @@ public class DoctorCommand implements Callable<Integer> {
         return hasError;
     }
 
-    private void checkPlugins(Settings settings, Settings globalSettings, PrintWriter out) {
+    /**
+     * Reports each enabled plugin's marketplace membership, then whether Claude Code can actually
+     * load it in this project. A plugin enabled without an installation record is an ERROR, not a
+     * warning: Claude Code refuses to load it and says so on every launch.
+     *
+     * @return true when at least one enabled plugin is not installed for this project
+     */
+    private boolean checkPlugins(Settings settings, Settings globalSettings, Path dir, PrintWriter out) {
         if (settings.enabledPlugins() == null || settings.enabledPlugins().isEmpty()) {
             emit(out, "[INFO] 0 plugin(s) enabled");
-            return;
+            return false;
         }
         var marketplaceMap = (hasMarketplaces(settings) || hasMarketplaces(globalSettings))
             ? pluginMapService.buildMap(settings, globalSettings)
@@ -171,6 +182,12 @@ public class DoctorCommand implements Callable<Integer> {
                 emit(out, "[WARNING] plugin enabled: " + pluginKey + " (not found in marketplace)");
             }
         });
+
+        var missing = claudePluginRegistryService.missingInstalls(settings.enabledPlugins(), dir);
+        missing.forEach(pluginKey -> emit(out,
+            "[ERROR] plugin enabled but not installed for this project: " + pluginKey
+                + " — run `ccx plugins sync`"));
+        return !missing.isEmpty();
     }
 
     private static boolean hasMarketplaces(Settings settings) {

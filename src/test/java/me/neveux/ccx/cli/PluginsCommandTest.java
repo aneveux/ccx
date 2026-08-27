@@ -4,6 +4,8 @@ package me.neveux.ccx.cli;
 import me.neveux.ccx.model.MarketplaceSource;
 import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ClaudePluginInstallService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
@@ -197,6 +199,209 @@ class PluginsCommandTest {
             assertThat(written.enabledPlugins())
                 .as("enable without map match must use the raw name as key")
                 .containsKey("foo");
+        }
+    }
+
+    /** Reports a fixed set of plugins as missing an installation record for the project. */
+    static class StubRegistryService extends ClaudePluginRegistryService {
+        List<String> missing = List.of();
+
+        @Override
+        public boolean isInstalledFor(String qualifiedName, Path projectRoot) {
+            return !missing.contains(qualifiedName);
+        }
+
+        @Override
+        public List<String> missingInstalls(Map<String, Boolean> enabledPlugins, Path projectRoot) {
+            return missing;
+        }
+    }
+
+    /** Records install attempts instead of spawning the Claude Code CLI. */
+    static class RecordingInstallService extends ClaudePluginInstallService {
+        final java.util.List<String> installed = new java.util.ArrayList<>();
+        InstallResult result = new InstallResult(Status.INSTALLED, "installed");
+
+        @Override
+        public InstallResult install(String qualifiedName, Path projectRoot) {
+            installed.add(qualifiedName);
+            return result;
+        }
+    }
+
+    private CommandLine commandLineWith(ClaudePluginRegistryService registryService,
+                                       ClaudePluginInstallService installService) {
+        var factory = new TestCommandFactory(
+            settingsService, new ProfileService(), new PluginMapService(), new ClaudeMdService())
+            .withClaudePluginRegistryService(registryService)
+            .withClaudePluginInstallService(installService);
+        var cl = new CommandLine(new CcxCommand(), factory);
+        cl.setOut(new PrintWriter(outputCapture, true));
+        cl.setErr(new PrintWriter(outputCapture, true));
+        return cl;
+    }
+
+    @Nested
+    @DisplayName("plugins enable — installation")
+    class EnableInstall {
+
+        @Test
+        @DisplayName("should install the plugin before writing settings when it has no install record")
+        void enable_installsMissingPlugin() throws Exception {
+            var registry = new StubRegistryService();
+            registry.missing = List.of("foo");
+            var install = new RecordingInstallService();
+            outputCapture.reset();
+
+            int exit = commandLineWith(registry, install).execute("plugins", "enable", "foo",
+                "--project-dir", projectDir.toString());
+
+            assertThat(install.installed)
+                .as("an enabled plugin with no install record must be installed for the project")
+                .containsExactly("foo");
+            assertThat(output())
+                .as("enable must report the install it performed")
+                .contains("Installed: foo");
+            assertThat(settingsService.read(projectDir).enabledPlugins())
+                .as("enable must still write the enablement")
+                .containsKey("foo");
+            assertThat(exit).as("a successful enable must exit 0").isZero();
+        }
+
+        @Test
+        @DisplayName("should skip the install when the plugin is already installed for the project")
+        void enable_skipsInstallWhenAlreadyInstalled() {
+            var registry = new StubRegistryService();
+            var install = new RecordingInstallService();
+            outputCapture.reset();
+
+            commandLineWith(registry, install).execute("plugins", "enable", "foo",
+                "--project-dir", projectDir.toString());
+
+            assertThat(install.installed)
+                .as("an already-installed plugin must not be reinstalled")
+                .isEmpty();
+            assertThat(output())
+                .as("no install happened, so no install line must be printed")
+                .doesNotContain("Installed:");
+        }
+
+        @Test
+        @DisplayName("should warn but still enable and exit 0 when the install fails")
+        void enable_warnsAndStillEnablesOnInstallFailure() throws Exception {
+            var registry = new StubRegistryService();
+            registry.missing = List.of("foo");
+            var install = new RecordingInstallService();
+            install.result = new ClaudePluginInstallService.InstallResult(
+                ClaudePluginInstallService.Status.CLI_NOT_FOUND, "no Claude Code CLI on PATH");
+            outputCapture.reset();
+
+            int exit = commandLineWith(registry, install).execute("plugins", "enable", "foo",
+                "--project-dir", projectDir.toString());
+
+            assertThat(output())
+                .as("a failed install must be surfaced with the underlying reason")
+                .contains("Warning: could not install 'foo'")
+                .contains("no Claude Code CLI on PATH");
+            assertThat(settingsService.read(projectDir).enabledPlugins())
+                .as("a failed install must not block the enablement — the state stays repairable")
+                .containsKey("foo");
+            assertThat(exit)
+                .as("a failed install is a warning, not a failure, on the enable path")
+                .isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("plugins sync")
+    class Sync {
+
+        @Test
+        @DisplayName("should install every enabled plugin that has no install record")
+        void sync_installsMissingPlugins() throws Exception {
+            settingsService.write(
+                new Settings().withEnabledPlugins(Map.of("slack@mkt", true)), projectDir);
+            var registry = new StubRegistryService();
+            registry.missing = List.of("slack@mkt");
+            var install = new RecordingInstallService();
+            outputCapture.reset();
+
+            int exit = commandLineWith(registry, install).execute("plugins", "sync",
+                "--project-dir", projectDir.toString());
+
+            assertThat(install.installed)
+                .as("sync must install each plugin missing an install record")
+                .containsExactly("slack@mkt");
+            assertThat(output())
+                .as("sync must confirm each install")
+                .contains("Installed slack@mkt");
+            assertThat(exit).as("an all-successful sync must exit 0").isZero();
+        }
+
+        @Test
+        @DisplayName("should report nothing to do and exit 0 when every plugin is installed")
+        void sync_reportsNothingToDo() throws Exception {
+            settingsService.write(
+                new Settings().withEnabledPlugins(Map.of("slack@mkt", true)), projectDir);
+            var install = new RecordingInstallService();
+            outputCapture.reset();
+
+            int exit = commandLineWith(new StubRegistryService(), install).execute("plugins", "sync",
+                "--project-dir", projectDir.toString());
+
+            assertThat(output())
+                .as("sync with nothing missing must say so")
+                .contains("All enabled plugins are installed for this project");
+            assertThat(install.installed)
+                .as("sync must not install anything when nothing is missing")
+                .isEmpty();
+            assertThat(exit).as("a no-op sync must exit 0").isZero();
+        }
+
+        @Test
+        @DisplayName("--dry-run should list what would be installed without installing")
+        void sync_dryRunInstallsNothing() throws Exception {
+            settingsService.write(
+                new Settings().withEnabledPlugins(Map.of("slack@mkt", true)), projectDir);
+            var registry = new StubRegistryService();
+            registry.missing = List.of("slack@mkt");
+            var install = new RecordingInstallService();
+            outputCapture.reset();
+
+            int exit = commandLineWith(registry, install).execute("plugins", "sync", "--dry-run",
+                "--project-dir", projectDir.toString());
+
+            assertThat(output())
+                .as("--dry-run must report the plugin it would install")
+                .contains("would install slack@mkt");
+            assertThat(install.installed)
+                .as("--dry-run must never install")
+                .isEmpty();
+            assertThat(exit).as("--dry-run must exit 0").isZero();
+        }
+
+        @Test
+        @DisplayName("should exit 1 and name the plugin when an install fails")
+        void sync_exitsOneOnInstallFailure() throws Exception {
+            settingsService.write(
+                new Settings().withEnabledPlugins(Map.of("slack@mkt", true)), projectDir);
+            var registry = new StubRegistryService();
+            registry.missing = List.of("slack@mkt");
+            var install = new RecordingInstallService();
+            install.result = new ClaudePluginInstallService.InstallResult(
+                ClaudePluginInstallService.Status.FAILED, "exit=1 marketplace not found");
+            outputCapture.reset();
+
+            int exit = commandLineWith(registry, install).execute("plugins", "sync",
+                "--project-dir", projectDir.toString());
+
+            assertThat(output())
+                .as("a failed repair must name the plugin and the reason")
+                .contains("Failed to install slack@mkt")
+                .contains("marketplace not found");
+            assertThat(exit)
+                .as("sync is an explicit repair command — a failure must be visible in the exit code")
+                .isEqualTo(1);
         }
     }
 

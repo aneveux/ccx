@@ -2,6 +2,7 @@
 package me.neveux.ccx.cli;
 
 import me.neveux.ccx.service.CcxConfigService;
+import me.neveux.ccx.service.ClaudePluginInstallService;
 import io.quarkus.test.junit.QuarkusMock;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -65,6 +66,12 @@ class FullScenarioE2ETest {
         // This leaves the command beans (the bug surface) untouched — only the config seam moves.
         QuarkusMock.installMockForType(new CcxConfigService(configDir), CcxConfigService.class);
 
+        // Enabling a profile installs its plugins through the Claude Code CLI. On the production
+        // path that spawns a real `claude plugin install`, which would mutate the developer's
+        // ~/.claude/plugins registry with records pointing at this temp dir. The subprocess is not
+        // what this test guards, so it is the second seam that moves.
+        QuarkusMock.installMockForType(new RefusingInstallService(), ClaudePluginInstallService.class);
+
         var profilesDir = configDir.resolve("profiles");
 
         // Profile `java`: extends [], enables one plugin, declares stacks + a rule.
@@ -114,6 +121,14 @@ class FullScenarioE2ETest {
                     }
                 });
             }
+        }
+    }
+
+    /** Reports the CLI as unavailable, so no subprocess is ever spawned from a test. */
+    static class RefusingInstallService extends ClaudePluginInstallService {
+        @Override
+        public InstallResult install(String qualifiedName, Path projectRoot) {
+            return new InstallResult(Status.CLI_NOT_FOUND, "plugin installation is stubbed out in tests");
         }
     }
 

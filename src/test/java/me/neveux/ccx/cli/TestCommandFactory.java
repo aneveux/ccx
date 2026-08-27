@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ClaudePluginInstallService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileApplyService;
@@ -13,6 +15,9 @@ import me.neveux.ccx.service.SkillsService;
 import picocli.CommandLine;
 
 import java.lang.reflect.Field;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Test-only picocli IFactory that injects service instances directly into command
@@ -29,6 +34,30 @@ public class TestCommandFactory implements CommandLine.IFactory {
     private final CcxContextService ccxContextService;
     private final CcxConfigService ccxConfigService;
     private final MarketplaceCloneService marketplaceCloneService;
+    /**
+     * Reports every enabled plugin as already installed, so commands under test never reach the
+     * install path. Tests that exercise installation replace it via
+     * {@link #withClaudePluginRegistryService}.
+     */
+    private ClaudePluginRegistryService claudePluginRegistryService = new ClaudePluginRegistryService() {
+        @Override
+        public boolean isInstalledFor(String qualifiedName, Path projectRoot) {
+            return true;
+        }
+
+        @Override
+        public List<String> missingInstalls(Map<String, Boolean> enabledPlugins, Path projectRoot) {
+            return List.of();
+        }
+    };
+
+    /** Fails without spawning a process, so a stray install attempt can never shell out in tests. */
+    private ClaudePluginInstallService claudePluginInstallService = new ClaudePluginInstallService() {
+        @Override
+        public InstallResult install(String qualifiedName, Path projectRoot) {
+            return new InstallResult(Status.CLI_NOT_FOUND, "no Claude Code CLI in tests");
+        }
+    };
 
     public TestCommandFactory(
             SettingsService settingsService,
@@ -119,6 +148,21 @@ public class TestCommandFactory implements CommandLine.IFactory {
         this.marketplaceCloneService = null;
     }
 
+    /**
+     * Sets the plugin registry service injected into commands that check installation state.
+     * Fluent rather than a constructor overload so existing test call sites stay untouched.
+     */
+    public TestCommandFactory withClaudePluginRegistryService(ClaudePluginRegistryService service) {
+        this.claudePluginRegistryService = service;
+        return this;
+    }
+
+    /** Sets the plugin install service injected into commands that install plugins. */
+    public TestCommandFactory withClaudePluginInstallService(ClaudePluginInstallService service) {
+        this.claudePluginInstallService = service;
+        return this;
+    }
+
     @Override
     @SuppressWarnings("unchecked")
     public <K> K create(Class<K> cls) throws Exception {
@@ -132,6 +176,8 @@ public class TestCommandFactory implements CommandLine.IFactory {
         injectIfPresent(instance, "ccxContextService", ccxContextService);
         injectIfPresent(instance, "ccxConfigService", ccxConfigService);
         injectIfPresent(instance, "marketplaceCloneService", marketplaceCloneService);
+        injectIfPresent(instance, "claudePluginRegistryService", claudePluginRegistryService);
+        injectIfPresent(instance, "claudePluginInstallService", claudePluginInstallService);
         injectIfPresent(instance, "mapper", new ObjectMapper());
         return (K) instance;
     }

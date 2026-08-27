@@ -25,6 +25,8 @@ import me.neveux.ccx.tui.CatppuccinTheme;
 import me.neveux.ccx.tui.Quips;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ClaudePluginInstallService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileApplyService;
@@ -74,6 +76,7 @@ public final class CcxApp {
     private final TuiState state;
     private final TuiActions tuiActions;
     private final MarketplaceFetchController fetch;
+    private final PluginInstallController pluginInstall;
 
     private final OverviewTab overviewTab = new OverviewTab();
     private final ProfilesTab profilesTab = new ProfilesTab();
@@ -93,6 +96,9 @@ public final class CcxApp {
         this.state = new TuiState(snapshot);
         this.fetch = new MarketplaceFetchController(settingsService, marketplaceCloneService,
             pluginMapService, projectDir);
+        // Not injected: CcxApp is built by hand rather than by CDI, and both services are stateless.
+        this.pluginInstall = new PluginInstallController(settingsService, new ClaudePluginRegistryService(),
+            new ClaudePluginInstallService(), projectDir, fetch::setStatus);
 
         fetch.start("marketplace-refresh", false);
         fetch.loadCacheInfo();
@@ -106,7 +112,7 @@ public final class CcxApp {
 
     boolean handleEvent(Event event, TuiRunner runner) {
         if (event instanceof TickEvent) {
-            return fetch.active();
+            return fetch.active() || pluginInstall.installing();
         }
         if (!(event instanceof KeyEvent k)) {
             return false;
@@ -251,6 +257,9 @@ public final class CcxApp {
                     ? Quips.pick(Quips.IMPOSSIBLE, err.hashCode()) + "  " + err
                     : Glyphs.OK + " toggled: " + pluginName + "  " + Quips.pick(Quips.TOGGLE, pluginName.hashCode());
                 fetch.setStatus(message, 3);
+                if (err == null && isProjectEnabled(newSnap, pluginName)) {
+                    pluginInstall.installPlugin(pluginName);
+                }
                 log.debug("plugin toggled name={}", pluginName);
             });
             case MCP -> resolvedItem(snap.mcps(), TuiSnapshot.McpEntry::name).ifPresent(mcp -> {
@@ -280,6 +289,16 @@ public final class CcxApp {
             default -> { /* no-op */ }
         }
         return true;
+    }
+
+    /**
+     * True when {@code snapshot} shows {@code qualifiedName} enabled in the project, which is what
+     * distinguishes a toggle that turned a plugin on from one that turned it off.
+     */
+    private static boolean isProjectEnabled(TuiSnapshot snapshot, String qualifiedName) {
+        return snapshot.plugins().stream()
+            .anyMatch(plugin -> qualifiedName.equals(plugin.qualifiedName())
+                && plugin.status() == TuiSnapshot.PluginStatus.PROJECT_ENABLED);
     }
 
     private <T> Optional<T> resolvedItem(List<T> items, Function<T, String> label) {
@@ -319,6 +338,11 @@ public final class CcxApp {
             };
         }
         fetch.setStatus(message, 3);
+        // A profile enable writes enabledPlugins for the whole extends closure; those plugins
+        // still need installing before Claude Code can load them.
+        if (err == null && (action.equals("enable") || action.equals("reinstall"))) {
+            pluginInstall.installEnabledPlugins();
+        }
         log.debug("profile action={} name={}", action, profileName);
         return true;
     }
@@ -364,6 +388,10 @@ public final class CcxApp {
             var newSnap = tuiDataService.snapshot(projectDir);
             state.setSnapshot(newSnap);
             log.debug("snapshot rebuilt after background marketplace refresh");
+        }
+        if (pluginInstall.consumeRefreshPending()) {
+            state.setSnapshot(tuiDataService.snapshot(projectDir));
+            log.debug("snapshot rebuilt after background plugin install");
         }
 
         var fullArea = frame.area();

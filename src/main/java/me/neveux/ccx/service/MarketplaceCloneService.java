@@ -2,6 +2,7 @@ package me.neveux.ccx.service;
 
 import me.neveux.ccx.model.MarketplaceSource;
 import me.neveux.ccx.util.FileUtils;
+import me.neveux.ccx.util.ProcessRunner;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,7 +13,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
 
 /**
  * Clones and updates marketplace git repositories into the local cache directory
@@ -134,36 +135,11 @@ public class MarketplaceCloneService {
     static final int GIT_TIMEOUT_SECONDS = 120;
 
     private String runGitCommand(List<String> args) throws IOException {
-        var pb = new ProcessBuilder(args);
-        pb.environment().put("GIT_TERMINAL_PROMPT", "0");
-        pb.redirectErrorStream(true);
-        var process = pb.start();
-        // Drain stdout in a virtual thread so it never fills the pipe buffer and deadlocks.
-        // readAllBytes() completes when the process exits or is destroyed.
-        var outputRef = new String[1];
-        var drainThread = Thread.ofVirtual().start(() -> {
-            try (var in = process.getInputStream()) {
-                outputRef[0] = new String(in.readAllBytes());
-            } catch (IOException ignored) {
-                outputRef[0] = "";
-            }
-        });
-        try {
-            if (!process.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                drainThread.join(1000);
-                throw new IOException("git command timed out after " + GIT_TIMEOUT_SECONDS + "s: " + args);
-            }
-            drainThread.join(5000);
-            var exitCode = process.exitValue();
-            var output = outputRef[0] != null ? outputRef[0] : "";
-            if (exitCode != 0) throw new IOException("git command failed (exit=" + exitCode + "): " + output);
-            return output;
-        } catch (InterruptedException e) {
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
-            throw new IOException("git command interrupted", e);
+        var result = ProcessRunner.run(args, null, Map.of("GIT_TERMINAL_PROMPT", "0"), GIT_TIMEOUT_SECONDS);
+        if (!result.isSuccess()) {
+            throw new IOException("git command failed (exit=" + result.exitCode() + "): " + result.output());
         }
+        return result.output();
     }
 
     protected void clone(String githubRepo, Path targetDir) throws IOException {

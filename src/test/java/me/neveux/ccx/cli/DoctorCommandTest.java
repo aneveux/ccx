@@ -10,6 +10,7 @@ import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
@@ -472,6 +473,60 @@ class DoctorCommandTest {
             assertThat(exit)
                 .as("a broken dependency must make doctor exit non-zero")
                 .isNotZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("when an enabled plugin has no installation record")
+    class WhenPluginNotInstalled {
+
+        private RunResult runWithMissing(List<String> missing) throws Exception {
+            var settings = new Settings().withEnabledPlugins(Map.of("slack@claude-plugins-official", true));
+            settingsService.write(settings, tempDir);
+
+            var registryService = new ClaudePluginRegistryService() {
+                @Override
+                public List<String> missingInstalls(Map<String, Boolean> enabledPlugins, Path projectRoot) {
+                    return missing;
+                }
+            };
+            var factory = new TestCommandFactory(
+                settingsService, new ProfileService(), new PluginMapService(), new ClaudeMdService())
+                .withClaudePluginRegistryService(registryService);
+            var cl = new CommandLine(new CcxCommand(), factory);
+            var out = new ByteArrayOutputStream();
+            cl.setOut(new PrintWriter(out, true));
+            var exit = cl.execute("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
+            return new RunResult(exit, out.toString());
+        }
+
+        @Test
+        @DisplayName("should report [ERROR] with the sync remediation and exit 1")
+        void doctor_reportsPluginNotInstalled() throws Exception {
+            var result = runWithMissing(List.of("slack@claude-plugins-official"));
+
+            assertThat(result.output())
+                .as("an enabled-but-uninstalled plugin is an ERROR — Claude Code refuses to load it")
+                .contains("[ERROR] plugin enabled but not installed for this project: "
+                    + "slack@claude-plugins-official")
+                .contains("ccx plugins sync");
+            assertThat(result.exitCode())
+                .as("a plugin Claude Code cannot load must fail doctor")
+                .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("should stay silent and exit 0 when every enabled plugin is installed")
+        void doctor_silentWhenAllInstalled() throws Exception {
+            var result = runWithMissing(List.of());
+
+            assertThat(result.output())
+                .as("no install gap must produce no install ERROR line")
+                .doesNotContain("not installed for this project");
+            assertThat(result.exitCode())
+                .as("a fully installed project must exit 0")
+                .isZero();
         }
     }
 

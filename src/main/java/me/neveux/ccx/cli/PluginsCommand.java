@@ -1,6 +1,8 @@
 package me.neveux.ccx.cli;
 
 import me.neveux.ccx.model.Settings;
+import me.neveux.ccx.service.ClaudePluginInstallService;
+import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.SettingsService;
@@ -28,8 +30,8 @@ import java.util.concurrent.Callable;
  * Manages Claude Code plugin entries in {@code .claude/settings.json}. Plugins
  * are identified by their qualified marketplace key (e.g. {@code java:java@acme}).
  * Subcommands cover listing (with enabled/global/available status), enabling,
- * disabling, comparing project vs global state, browsing tags, and force-refreshing
- * the marketplace clone.
+ * disabling, installing what is enabled but missing, comparing project vs global
+ * state, browsing tags, and force-refreshing the marketplace clone.
  */
 @Command(
     name = "plugins",
@@ -38,6 +40,7 @@ import java.util.concurrent.Callable;
         PluginsCommand.ListCommand.class,
         PluginsCommand.EnableCommand.class,
         PluginsCommand.DisableCommand.class,
+        PluginsCommand.SyncCommand.class,
         PluginsCommand.DiffCommand.class,
         PluginsCommand.TagsCommand.class,
         PluginsCommand.RefreshCommand.class,
@@ -56,6 +59,47 @@ public class PluginsCommand implements Runnable {
     @Override
     public void run() {
         spec.commandLine().usage(spec.commandLine().getOut());
+    }
+
+    /**
+     * Installs every plugin enabled in {@code dir} that Claude Code has no installation record
+     * for, printing one line per plugin. Shared by {@code plugins sync} and the profile-enable
+     * paths, which all leave {@code enabledPlugins} entries behind that Claude Code cannot load
+     * until the matching install exists.
+     *
+     * @param registryService  reads Claude Code's installation records
+     * @param installService   runs the Claude Code CLI
+     * @param settings         the project's settings, already read
+     * @param dir              the project directory
+     * @param spec             command spec, for the out/err writers
+     * @param failureIsFatal   whether the caller exits non-zero on a failed install; controls
+     *                         whether failures read as errors or as warnings
+     * @return the number of plugins that could not be installed
+     */
+    static int installMissingPlugins(ClaudePluginRegistryService registryService,
+                                     ClaudePluginInstallService installService,
+                                     Settings settings, Path dir,
+                                     CommandLine.Model.CommandSpec spec,
+                                     boolean failureIsFatal) {
+        var missing = registryService.missingInstalls(settings.enabledPlugins(), dir);
+        if (missing.isEmpty()) return 0;
+
+        var out = spec.commandLine().getOut();
+        var err = spec.commandLine().getErr();
+        var failures = 0;
+        for (var plugin : missing) {
+            var result = installService.install(plugin, dir);
+            if (result.isSuccess()) {
+                out.println(CliFormat.OK + " Installed " + plugin);
+            } else {
+                err.println(failureIsFatal
+                    ? CliFormat.ERR + " Failed to install " + plugin + ": " + result.message()
+                    : CliFormat.WARN + " Could not install " + plugin + ": " + result.message());
+                failures++;
+            }
+        }
+        out.flush();
+        return failures;
     }
 
     /**
@@ -135,9 +179,13 @@ public class PluginsCommand implements Runnable {
     }
 
     /**
-     * Enables a plugin in the project's {@code settings.json}. Resolves short
-     * names to fully-qualified marketplace keys via the plugin map; warns and
-     * uses the raw name when resolution fails.
+     * Enables a plugin in the project's {@code settings.json} and installs it for that project
+     * so Claude Code can actually load it. Resolves short names to fully-qualified marketplace
+     * keys via the plugin map; warns and uses the raw name when resolution fails.
+     *
+     * <p>A failed install never blocks the enablement: the entry is written anyway and the
+     * manual remediation command is printed, leaving the state repairable with
+     * {@code ccx plugins sync}.
      */
     @Command(name = "enable", description = "Enable a plugin in project settings")
     @RegisterForReflection
@@ -148,6 +196,12 @@ public class PluginsCommand implements Runnable {
 
         @Inject
         PluginMapService pluginMapService;
+
+        @Inject
+        ClaudePluginRegistryService claudePluginRegistryService;
+
+        @Inject
+        ClaudePluginInstallService claudePluginInstallService;
 
         @Parameters(index = "0", description = "Plugin name or short name")
         String name;
@@ -174,6 +228,11 @@ public class PluginsCommand implements Runnable {
                 qualifiedName = name;
             }
 
+            // Install before writing settings: `claude plugin install` rewrites settings.json
+            // itself, so ccx must have the last word to preserve its own formatting and
+            // round-tripped unknown fields.
+            installIfMissing(qualifiedName, dir);
+
             var enabledPlugins = settings.enabledPlugins() == null
                 ? new LinkedHashMap<String, Boolean>()
                 : new LinkedHashMap<>(settings.enabledPlugins());
@@ -183,6 +242,75 @@ public class PluginsCommand implements Runnable {
             out.println("Enabled: " + qualifiedName);
             out.flush();
             return 0;
+        }
+
+        private void installIfMissing(String qualifiedName, Path dir) {
+            if (claudePluginRegistryService.isInstalledFor(qualifiedName, dir)) return;
+            var out = spec.commandLine().getOut();
+            var result = claudePluginInstallService.install(qualifiedName, dir);
+            if (result.isSuccess()) {
+                out.println("Installed: " + qualifiedName);
+                return;
+            }
+            spec.commandLine().getErr().println(
+                "Warning: could not install '" + qualifiedName + "': " + result.message());
+        }
+    }
+
+    /**
+     * Installs every plugin that is enabled in the project's {@code settings.json} but has no
+     * Claude Code installation record for this project — the state Claude Code reports as
+     * {@code isn't installed here} or {@code not cached}.
+     *
+     * <p>This is the repair path for projects configured before installation was automatic, or
+     * whose cached plugin tree was garbage-collected. Exits 1 when any install fails, since the
+     * whole point of the command is to leave the project loadable.
+     */
+    @Command(name = "sync", description = "Install enabled plugins that are missing locally")
+    @RegisterForReflection
+    static class SyncCommand implements Callable<Integer> {
+
+        @Inject
+        SettingsService settingsService;
+
+        @Inject
+        ClaudePluginRegistryService claudePluginRegistryService;
+
+        @Inject
+        ClaudePluginInstallService claudePluginInstallService;
+
+        @Option(names = {"--project-dir"}, description = "Project directory (defaults to cwd)")
+        Path projectDir;
+
+        @Option(names = {"--dry-run"}, description = "Report what would be installed without installing")
+        boolean dryRun;
+
+        @CommandLine.Spec
+        CommandLine.Model.CommandSpec spec;
+
+        @Override
+        public Integer call() {
+            var dir = CommandUtil.resolveProjectDir(projectDir);
+            if (!CommandUtil.checkPathSecurity(dir, spec)) return 1;
+
+            var settings = settingsService.read(dir);
+            var missing = claudePluginRegistryService.missingInstalls(settings.enabledPlugins(), dir);
+            var out = spec.commandLine().getOut();
+            if (missing.isEmpty()) {
+                out.println(CliFormat.OK + " All enabled plugins are installed for this project");
+                out.flush();
+                return 0;
+            }
+
+            if (dryRun) {
+                missing.forEach(plugin -> out.println("would install " + plugin));
+                out.flush();
+                return 0;
+            }
+
+            var failures = installMissingPlugins(
+                claudePluginRegistryService, claudePluginInstallService, settings, dir, spec, true);
+            return failures == 0 ? 0 : 1;
         }
     }
 
