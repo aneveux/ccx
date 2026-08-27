@@ -38,9 +38,17 @@ import java.util.function.Supplier;
     mixinStandardHelpOptions = true,
     versionProvider = CcxCommand.VersionProvider.class
 )
-public class CcxCommand implements Runnable {
+public class CcxCommand implements Runnable, CommandLine.IExitCodeGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(CcxCommand.class);
+
+    private int exitCode = 0;
+
+    /** Lets the banner signal a rejected {@code --project-dir}, since {@link Runnable} cannot. */
+    @Override
+    public int getExitCode() {
+        return exitCode;
+    }
 
     @Option(names = {"--project-dir"}, description = "Project directory (defaults to cwd)")
     Path projectDir;
@@ -79,6 +87,10 @@ public class CcxCommand implements Runnable {
         var out = spec != null ? spec.commandLine().getOut()
             : new PrintWriter(System.out, true);
         var dir = CommandUtil.resolveProjectDir(projectDir);
+        if (!CommandUtil.checkPathSecurity(dir, spec)) {
+            exitCode = 1;
+            return;
+        }
 
         var pluginCount = enabledPluginCount(dir);
         var noProfiles = hasNoProfiles();

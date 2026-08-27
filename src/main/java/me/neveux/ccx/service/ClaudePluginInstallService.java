@@ -263,6 +263,7 @@ public class ClaudePluginInstallService {
         return FALLBACK_CLI_PATHS.stream()
             .map(segments -> Path.of(home, segments.toArray(String[]::new)))
             .filter(Files::isRegularFile)
+            .filter(Files::isExecutable)
             .findFirst();
     }
 
@@ -286,6 +287,10 @@ public class ClaudePluginInstallService {
             var path = Path.of(location);
             if (!Files.isRegularFile(path)) {
                 log.debug("claude CLI candidate is not a file path={}", path);
+                return Optional.empty();
+            }
+            if (!Files.isExecutable(path)) {
+                log.debug("claude CLI candidate is not executable path={}", path);
                 return Optional.empty();
             }
             return Optional.of(path);

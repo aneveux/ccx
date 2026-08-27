@@ -329,6 +329,7 @@ public class ProfileApplyService {
                 try (var cmdStream = Files.list(commandsSourceDir)) {
                     cmdStream
                         .filter(p -> p.getFileName().toString().endsWith(".md"))
+                        .sorted()
                         .forEach(cmdPath -> {
                             if (!isUnderConfigDir(cmdPath)) {
                                 return;

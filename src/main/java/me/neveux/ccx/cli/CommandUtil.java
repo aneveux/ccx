@@ -3,6 +3,7 @@ package me.neveux.ccx.cli;
 import me.neveux.ccx.service.PathSecurity;
 import picocli.CommandLine;
 
+import java.io.PrintWriter;
 import java.nio.file.Path;
 
 /**
@@ -49,7 +50,7 @@ final class CommandUtil {
     static boolean checkPathSecurity(Path dir, CommandLine.Model.CommandSpec spec, String optionLabel) {
         if (!PathSecurity.isAllowed(dir)) {
             var err = spec != null ? spec.commandLine().getErr()
-                : new java.io.PrintWriter(System.err, true);
+                : new PrintWriter(System.err, true);
             err.println("Error: " + optionLabel + " is outside allowed directories: " + dir);
             return false;
         }

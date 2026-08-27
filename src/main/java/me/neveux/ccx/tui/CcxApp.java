@@ -21,8 +21,6 @@ import dev.tamboui.widgets.tabs.Tabs;
 import dev.tamboui.widgets.tabs.TabsState;
 import me.neveux.ccx.cli.CcxCommand;
 import me.neveux.ccx.model.ProfileDriftState;
-import me.neveux.ccx.tui.CatppuccinTheme;
-import me.neveux.ccx.tui.Quips;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ClaudePluginInstallService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;

@@ -42,7 +42,7 @@ Architecture: see `ARCHITECTURE.md`. Vision: see `VISION.md`.
 - `CcxApp`, `TuiActions`, and the root `CcxCommand` are NOT CDI beans (built by hand, not via the picocli `IFactory`). They must construct their own services (`new SettingsService()`) and be exception-safe (a banner/render must never throw).
 - Commands that read from `~/.claude` must accept a `--global-dir` option so tests can redirect to `@TempDir`. Never hardcode home-relative paths in command logic.
 - `DoctorCommand --global-dir` uses HOME-root semantics (`Path.of(user.home)`, resolves `.claude/` underneath), distinct from `CommandUtil.resolveGlobalDir()` which returns `~/.claude` directly. These cannot be unified. Guard `checkPathSecurity` on `--global-dir` only when it is explicitly non-null.
-- `TestCommandFactory` injects services by field name via reflection. Fields must be named exactly: `settingsService`, `profileService`, `pluginMapService`, `claudeMdService`, `skillsService`, `ccxContextService`. New commands must match.
+- `TestCommandFactory` injects services by field name via reflection. Fields must be named exactly: `settingsService`, `profileService`, `pluginMapService`, `claudeMdService`, `skillsService`, `profileApplyService`, `ccxContextService`, `profileLifecycleService`, `ccxConfigService`, `marketplaceCloneService`, `claudePluginRegistryService`, `claudePluginInstallService`, `mapper`. New commands must match.
 
 ### TUI
 - The render thread must never call `PluginMapService.buildMap()`/`resolve()` — those trigger a git clone via `ensureLocal()` and freeze the UI. Use `buildMapNoFetch()` on the render path; the background daemon thread owns the actual clone/pull.
@@ -50,7 +50,7 @@ Architecture: see `ARCHITECTURE.md`. Vision: see `VISION.md`.
 
 ### Testing
 - Never assert only on exit code — TDD stubs throw `UnsupportedOperationException` which also exits non-zero, causing false passes. Always assert output content too.
-- AssertJ is not in the Quarkus BOM — declare version explicitly (`3.25.3` in `pom.xml`).
+- AssertJ is not in the Quarkus BOM — declare version explicitly (`3.27.7` in `pom.xml`).
 - Mockito is NOT on the classpath (only `quarkus-junit5` + `assertj-core`). For failure injection, hand-roll a throwing subclass (e.g. `ObjectWriter` overriding `writeValue` to throw). For driving the real production CDI path under test, use `QuarkusMock.installMockForType(realObject, Type.class)` — it takes a real object and ships in `quarkus-junit5`.
 - Under `@QuarkusTest`/`@QuarkusMainTest`, `@TempDir` field injection runs AFTER `@BeforeEach` (fields are null when setup fires). Create temp dirs manually with `Files.createTempDirectory` in `@BeforeEach` and clean up with a reverse-order walk in `@AfterEach`.
 - A backlog/STATE "open" status is a HINT, never ground truth. Always re-verify a finding against actual `file:line` on disk before trusting it — prior "open" ≠ currently-broken.

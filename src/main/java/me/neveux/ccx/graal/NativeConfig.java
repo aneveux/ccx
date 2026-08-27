@@ -1,5 +1,6 @@
 package me.neveux.ccx.graal;
 
+import dev.tamboui.backend.jline3.JLineBackendProvider;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 /**
@@ -9,5 +10,5 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
  * backend provider — for class-only reflection. Without this registration, the native
  * binary throws {@link ClassNotFoundException} at startup when looking up the backend.
  */
-@RegisterForReflection(targets = {dev.tamboui.backend.jline3.JLineBackendProvider.class}, methods = false, fields = false)
+@RegisterForReflection(targets = {JLineBackendProvider.class}, methods = false, fields = false)
 public class NativeConfig {}

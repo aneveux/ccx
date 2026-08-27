@@ -269,10 +269,19 @@ class ClaudePluginInstallServiceTest {
     @DisplayName("claudeCli() discovery ladder")
     class Discovery {
 
+        /** Creates a CLI stand-in the ladder will accept: a regular file with the exec bit set. */
+        private Path createExecutable(Path path) throws IOException {
+            Files.createFile(path);
+            if (!path.toFile().setExecutable(true)) {
+                throw new IOException("could not make " + path + " executable");
+            }
+            return path;
+        }
+
         @Test
         @DisplayName("an explicit override wins and PATH is never consulted")
         void envOverride_isUsedWithoutTouchingPath(@TempDir Path tempDir) throws Exception {
-            var pinned = Files.createFile(tempDir.resolve("pinned-claude"));
+            var pinned = createExecutable(tempDir.resolve("pinned-claude"));
             var service = new DiscoveringService();
             service.envOverride = pinned.toString();
 
@@ -299,11 +308,27 @@ class ClaudePluginInstallServiceTest {
         @Test
         @DisplayName("with no override, the binary found on PATH is used")
         void noOverride_usesPathResult(@TempDir Path tempDir) throws Exception {
-            var onPath = Files.createFile(tempDir.resolve("path-claude"));
+            var onPath = createExecutable(tempDir.resolve("path-claude"));
             var service = new DiscoveringService();
             service.whichResult = new ProcessResult(0, onPath + "\n");
 
             assertThat(service.claudeCli()).contains(onPath);
+        }
+
+        @Test
+        @DisplayName("a PATH hit that is a regular file but not executable is rejected")
+        void pathResultThatIsNotExecutable_isRejected(@TempDir Path tempDir) throws Exception {
+            var notExecutable = Files.createFile(tempDir.resolve("path-claude"));
+            if (!notExecutable.toFile().setExecutable(false)) {
+                throw new IOException("could not clear the exec bit on " + notExecutable);
+            }
+            var service = new DiscoveringService();
+            service.whichResult = new ProcessResult(0, notExecutable + "\n");
+            service.home = tempDir.resolve("no-home").toString();
+
+            assertThat(service.claudeCli())
+                .as("accepting it only defers the failure to spawn time, with a worse message")
+                .isEmpty();
         }
 
         @Test
@@ -325,8 +350,8 @@ class ClaudePluginInstallServiceTest {
             var claudeLocal = homeDir.resolve(".claude/local/claude");
             Files.createDirectories(localBin.getParent());
             Files.createDirectories(claudeLocal.getParent());
-            Files.createFile(localBin);
-            Files.createFile(claudeLocal);
+            createExecutable(localBin);
+            createExecutable(claudeLocal);
 
             var service = new DiscoveringService();
             service.home = homeDir.toString();
@@ -341,7 +366,7 @@ class ClaudePluginInstallServiceTest {
         void noPathResult_fallsBackToClaudeLocal(@TempDir Path homeDir) throws Exception {
             var claudeLocal = homeDir.resolve(".claude/local/claude");
             Files.createDirectories(claudeLocal.getParent());
-            Files.createFile(claudeLocal);
+            createExecutable(claudeLocal);
 
             var service = new DiscoveringService();
             service.home = homeDir.toString();

@@ -43,6 +43,7 @@ class CcxCommandTest {
     private RunResult run(String... args) {
         var out = new ByteArrayOutputStream();
         commandLine.setOut(new PrintWriter(out, true));
+        commandLine.setErr(new PrintWriter(out, true));
         var exit = commandLine.execute(args);
         return new RunResult(exit, out.toString());
     }
@@ -105,6 +106,20 @@ class CcxCommandTest {
             assertThat(result.output())
                 .as("a configured project must report how many plugins are enabled here")
                 .contains("1 plugin");
+        }
+
+        @Test
+        @DisplayName("should reject a --project-dir outside the allowed roots like every subcommand")
+        void bare_outsideAllowedRoots_isRejected() {
+            var result = run("--project-dir", "/etc");
+
+            assertThat(result.exitCode())
+                .as("the root command read settings from an unchecked path and still exited 0")
+                .isEqualTo(1);
+            assertThat(result.output())
+                .as("the rejection must name the option and the path, and print no banner")
+                .contains("--project-dir is outside allowed directories: /etc")
+                .doesNotContain("🌿");
         }
     }
 }

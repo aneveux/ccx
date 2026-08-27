@@ -41,7 +41,11 @@ jobs:
           filters: |
             native:
               - 'src/main/java/me/neveux/ccx/graal/**'
-              - 'src/main/resources/META-INF/native-image/**'
+              # Jackson records are reflection-only: a new or renamed one breaks the native
+              # binary at runtime and nothing on the JVM side notices.
+              - 'src/main/java/me/neveux/ccx/model/**'
+              - 'src/main/resources/META-INF/**'
+              - 'src/main/resources/application.properties'
               - 'pom.xml'
 
   native-smoke:
