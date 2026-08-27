@@ -424,6 +424,35 @@ class ProfilesCommandTest {
                 .as("the guard is per-member: an already-enabled dependency must not be re-applied")
                 .isEqualTo(javaEnabledAt);
         }
+
+        @Test
+        @DisplayName("should report a circular extends chain instead of crashing with a stack trace")
+        void enable_circularExtends_reportsTheCycle() throws Exception {
+            writeProfileExtending("cycle-a", "cycle-b");
+            writeProfileExtending("cycle-b", "cycle-a");
+
+            int exit = runFull("profiles", "enable", "cycle-a", "--project-dir", tempDir.toString());
+
+            assertThat(exit)
+                .as("an unresolvable profile must fail the command")
+                .isEqualTo(1);
+            assertThat(capturedOutput())
+                .as("the user needs the cycle named and a way out, not an uncaught ProfileCycleException")
+                .contains("circular")
+                .contains("cycle-a")
+                .contains("cycle-b");
+            assertThat(capturedOutput())
+                .as("picocli prints the class name and a stack trace for anything the command lets escape")
+                .doesNotContain("ProfileCycleException")
+                .doesNotContain("\tat me.neveux.ccx");
+        }
+
+        private void writeProfileExtending(String name, String parent) throws Exception {
+            var dir = ccxConfigDir.resolve("profiles/" + name);
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("profile.yaml"),
+                "metadata:\n  name: " + name + "\nextends:\n  - " + parent + "\n");
+        }
     }
 
     @Nested

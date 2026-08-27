@@ -114,11 +114,10 @@ public class TuiDataService {
         var ccxContext = ccxContextService.read(projectDir);
 
         var combinedMarketplaceSources = PluginMapService.mergeSources(settings, globalSettings);
-        var marketplaceMap = combinedMarketplaceSources.isEmpty()
-            ? Map.<String, String>of()
+        var marketplace = combinedMarketplaceSources.isEmpty()
+            ? PluginMapService.PluginMap.EMPTY
             : pluginMapService.buildMapNoFetch(combinedMarketplaceSources);
-        var marketplaceDescriptions = pluginMapService.getLastDescriptions();
-        var plugins = buildPluginEntries(settings, globalSettings, marketplaceMap, marketplaceDescriptions);
+        var plugins = buildPluginEntries(settings, globalSettings, marketplace.entries(), marketplace.descriptions());
         var claudeMdEntries = buildStackEntries(projectDir, globalRoot);
         var mcps = buildMcpEntries(settings);
 

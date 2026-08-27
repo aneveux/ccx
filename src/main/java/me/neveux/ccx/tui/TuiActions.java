@@ -92,23 +92,33 @@ public final class TuiActions {
 
     public TuiSnapshot addStack(String stackLine, Path projectDir) {
         var claudeMd = projectDir.resolve(".claude/CLAUDE.md");
-        var current = claudeMdService.readMarkerBlock(claudeMd);
-        if (!current.contains(stackLine)) {
-            var updated = new ArrayList<>(current);
-            updated.add(stackLine);
-            claudeMdService.writeMarkerBlock(claudeMd, updated);
-            log.debug("stack added line={} projectDir={}", stackLine, projectDir);
+        try {
+            var current = claudeMdService.readMarkerBlock(claudeMd);
+            if (!current.contains(stackLine)) {
+                var updated = new ArrayList<>(current);
+                updated.add(stackLine);
+                claudeMdService.writeMarkerBlock(claudeMd, updated);
+                log.debug("stack added line={} projectDir={}", stackLine, projectDir);
+            }
+        } catch (ConfigReadException | ConfigWriteException e) {
+            lastError = e.getMessage();
+            log.warn("stack add aborted line={} projectDir={}", stackLine, projectDir, e);
         }
         return tuiDataService.snapshot(projectDir);
     }
 
     public TuiSnapshot removeStack(String stackLine, Path projectDir) {
         var claudeMd = projectDir.resolve(".claude/CLAUDE.md");
-        var current = claudeMdService.readMarkerBlock(claudeMd);
-        var updated = new ArrayList<>(current);
-        if (updated.remove(stackLine)) {
-            claudeMdService.writeMarkerBlock(claudeMd, updated);
-            log.debug("stack removed line={} projectDir={}", stackLine, projectDir);
+        try {
+            var current = claudeMdService.readMarkerBlock(claudeMd);
+            var updated = new ArrayList<>(current);
+            if (updated.remove(stackLine)) {
+                claudeMdService.writeMarkerBlock(claudeMd, updated);
+                log.debug("stack removed line={} projectDir={}", stackLine, projectDir);
+            }
+        } catch (ConfigReadException | ConfigWriteException e) {
+            lastError = e.getMessage();
+            log.warn("stack remove aborted line={} projectDir={}", stackLine, projectDir, e);
         }
         return tuiDataService.snapshot(projectDir);
     }

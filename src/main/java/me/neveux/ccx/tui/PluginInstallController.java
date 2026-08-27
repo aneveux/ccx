@@ -32,7 +32,7 @@ import java.util.function.BiConsumer;
  * <p>Not {@code final} so {@code CcxAppTest} can substitute a recording subclass and assert which
  * key presses reach an install without spawning a subprocess.
  */
-class PluginInstallController {
+class PluginInstallController implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(PluginInstallController.class);
 
@@ -166,6 +166,23 @@ class PluginInstallController {
                 inFlight.decrementAndGet();
             }
         });
+    }
+
+    /**
+     * Shuts the install thread down. Its thread is a daemon so a leaked executor never blocks JVM
+     * exit, but one leaks per controller: a suite that builds many controllers, or any future
+     * embedded launch, accumulates idle threads holding their queued installs alive. Already
+     * submitted installs are left to finish — cancelling one mid-flight would abort a
+     * {@code claude plugin install} that is halfway through writing Claude Code's own state.
+     *
+     * <p>A controller reused after {@code close()} lazily creates a fresh executor.
+     */
+    @Override
+    public synchronized void close() {
+        if (executor == null) return;
+        executor.shutdown();
+        executor = null;
+        log.debug("plugin install executor shut down projectDir={}", projectDir);
     }
 
     private synchronized ExecutorService executor() {

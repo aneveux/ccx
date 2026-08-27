@@ -15,6 +15,9 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -241,7 +244,7 @@ class PluginMapServiceTest {
         void buildMapNoFetch_githubSourceNotYetCloned_returnsEmpty(@TempDir Path tempDir) {
             // A github source whose local cache dir does NOT exist
             var source = new MarketplaceSource("my-mkt", null, "github", "owner/repo");
-            var result = service.buildMapNoFetch(List.of(source));
+            var result = service.buildMapNoFetch(List.of(source)).entries();
             assertThat(result)
                 .as("github source with no local clone must return empty — no fetch, no exception")
                 .isEmpty();
@@ -252,7 +255,7 @@ class PluginMapServiceTest {
         void buildMapNoFetch_directorySource_returnsPlugins(@TempDir Path marketplaceDir) throws Exception {
             Files.createDirectories(marketplaceDir.resolve("java-stack"));
             var source = new MarketplaceSource("my-mkt", marketplaceDir.toString(), "directory", null);
-            var result = service.buildMapNoFetch(List.of(source));
+            var result = service.buildMapNoFetch(List.of(source)).entries();
             assertThat(result)
                 .as("directory source must be scanned live by buildMapNoFetch")
                 .containsKey("java-stack@my-mkt");
@@ -275,7 +278,7 @@ class PluginMapServiceTest {
                 registryServiceWithout(tempDir.resolve("no-registry.json")));
 
             var source = new MarketplaceSource("cloned-mkt", null, "github", "owner/repo");
-            var result = svc.buildMapNoFetch(List.of(source));
+            var result = svc.buildMapNoFetch(List.of(source)).entries();
 
             assertThat(result)
                 .as("github source with local clone dir must return plugins without fetching")
@@ -317,7 +320,7 @@ class PluginMapServiceTest {
 
             var source = new MarketplaceSource(
                 "cloudbees-marketplace", null, "github", "cloudbees/cloudbees-claude-plugins");
-            var result = serviceReadingRegistry(registryFile).buildMap(List.of(source));
+            var result = serviceReadingRegistry(registryFile).buildMap(List.of(source)).entries();
 
             assertThat(result)
                 .as("ccx cannot clone the private repo, so it must read Claude Code's clone instead")
@@ -338,7 +341,7 @@ class PluginMapServiceTest {
                 """.formatted(installed));
 
             var declared = new MarketplaceSource("unrelated", tempDir.resolve("unrelated").toString(), "directory", null);
-            var result = serviceReadingRegistry(registryFile).buildMap(List.of(declared));
+            var result = serviceReadingRegistry(registryFile).buildMap(List.of(declared)).entries();
 
             assertThat(result)
                 .as("a marketplace absent from every settings.json is still loaded by Claude Code")
@@ -364,7 +367,7 @@ class PluginMapServiceTest {
                 """.formatted(registryOnlyDir));
 
             var declared = new MarketplaceSource("my-mkt", declaredDir.toString(), "directory", null);
-            var result = serviceReadingRegistry(registryFile).buildMap(List.of(declared));
+            var result = serviceReadingRegistry(registryFile).buildMap(List.of(declared)).entries();
 
             assertThat(result)
                 .as("an explicitly declared marketplace must not be shadowed by one only Claude Code knows")
@@ -463,7 +466,7 @@ class PluginMapServiceTest {
 
             var source = new MarketplaceSource("ccx-plugins", marketplaceDir.toString(), null, null);
 
-            var result = service.buildMap(List.of(source));
+            var result = service.buildMap(List.of(source)).entries();
 
             assertThat(result)
                 .as("buildMap must include plugins listed in marketplace.json")
@@ -521,12 +524,12 @@ class PluginMapServiceTest {
 
             var result = service.buildMap(List.of(source));
 
-            assertThat(result)
+            assertThat(result.entries())
                 .as("real-shaped object-array manifest must yield plugin names, not an empty map")
                 .containsEntry("bark", "bark@claude-garden")
                 .containsEntry("api-security", "api-security@claude-garden");
 
-            assertThat(service.getLastDescriptions())
+            assertThat(result.descriptions())
                 .as("descriptions must be extracted from the per-plugin description field")
                 .containsEntry("bark@claude-garden", "Bash development plugin with quality validation agents.")
                 .containsEntry("api-security@claude-garden", "Automate API security in Claude Code.");
@@ -542,7 +545,7 @@ class PluginMapServiceTest {
 
             var source = new MarketplaceSource("my-stack", marketplaceDir.toString(), null, null);
 
-            var result = service.buildMap(List.of(source));
+            var result = service.buildMap(List.of(source)).entries();
 
             assertThat(result)
                 .as("fallback dir scan must discover plugins from subdirectories")
@@ -596,6 +599,79 @@ class PluginMapServiceTest {
             assertThat(rootNode.path("descriptions").path("antoine-voice").asText())
                 .as("descriptions.antoine-voice must equal the value from marketplace.json")
                 .isEqualTo("Rewrite text in Antoine's personal voice");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Plan 050 B1 — a build's entries and descriptions travel together
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("when two threads build different marketplaces at once")
+    class WhenBuildingConcurrently {
+
+        private static final int ROUNDS = 50;
+
+        /**
+         * The TUI render thread and the background marketplace-fetch thread both build plugin maps
+         * against the same service instance. While the descriptions lived in a service field, the
+         * slower caller read whichever descriptions the other build happened to leave behind, so
+         * the plugin list showed foreign descriptions or none at all.
+         */
+        @Test
+        @DisplayName("each build keeps the descriptions belonging to the entries it returned")
+        void concurrentBuilds_neverCrossEntriesAndDescriptions() throws Exception {
+            var describedDir = tempDir.resolve("described");
+            Files.createDirectories(describedDir.resolve(".claude-plugin"));
+            Files.writeString(describedDir.resolve(".claude-plugin/marketplace.json"), """
+                {"plugins": [{"name": "alpha", "description": "the described plugin"}]}
+                """);
+            var plainDir = tempDir.resolve("plain");
+            Files.createDirectories(plainDir.resolve("beta"));
+
+            var described = List.of(new MarketplaceSource("described", describedDir.toString(), "directory", null));
+            var plain = List.of(new MarketplaceSource("plain", plainDir.toString(), "directory", null));
+
+            var startEachRound = new CyclicBarrier(2);
+            var failures = new CopyOnWriteArrayList<String>();
+
+            var describedBuilder = new Thread(() -> repeat(startEachRound, failures, () -> {
+                var built = service.buildMapNoFetch(described);
+                if (!built.entries().containsKey("alpha@described")
+                    || !"the described plugin".equals(built.descriptions().get("alpha@described"))) {
+                    failures.add("a described build lost its own descriptions: " + built);
+                }
+            }));
+            var plainBuilder = new Thread(() -> repeat(startEachRound, failures, () -> {
+                var built = service.buildMapNoFetch(plain);
+                if (!built.entries().containsKey("beta@plain") || !built.descriptions().isEmpty()) {
+                    failures.add("a description-less build picked up foreign descriptions: " + built);
+                }
+            }));
+
+            describedBuilder.start();
+            plainBuilder.start();
+            describedBuilder.join(30_000);
+            plainBuilder.join(30_000);
+
+            assertThat(failures)
+                .as("descriptions must arrive with the entries they describe, whoever else is building")
+                .isEmpty();
+        }
+
+        /** Runs {@code round} {@value #ROUNDS} times, rendezvousing with the other builder each time. */
+        private void repeat(CyclicBarrier startEachRound, List<String> failures, Runnable round) {
+            for (var i = 0; i < ROUNDS; i++) {
+                try {
+                    startEachRound.await(10, TimeUnit.SECONDS);
+                    round.run();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (Exception e) {
+                    failures.add("build round " + i + " failed: " + e);
+                }
+            }
         }
     }
 }

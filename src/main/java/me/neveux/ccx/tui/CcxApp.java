@@ -123,7 +123,7 @@ public final class CcxApp {
     }
 
     public void run() throws Exception {
-        try (var tui = TuiRunner.create()) {
+        try (var tui = TuiRunner.create(); pluginInstall) {
             tui.run(this::handleEvent, this::renderFrame);
         }
     }

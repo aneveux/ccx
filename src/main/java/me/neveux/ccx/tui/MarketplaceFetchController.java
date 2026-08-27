@@ -93,7 +93,7 @@ class MarketplaceFetchController {
                 }
             }
             if (!sources.isEmpty()) {
-                fetchedCount = pluginMapService.buildMap(sources).size();
+                fetchedCount = pluginMapService.buildMap(sources).entries().size();
             }
             succeeded = true;
             log.debug("background marketplace fetch done count={} rebuild pending", fetchedCount);

@@ -29,6 +29,11 @@ class MarketplaceFetchControllerTest {
     @TempDir
     Path tempDir;
 
+    /** Wraps stub entries in a {@link PluginMapService.PluginMap} — no stub here declares descriptions. */
+    private static PluginMapService.PluginMap pluginMapOf(Map<String, String> entries) {
+        return new PluginMapService.PluginMap(entries, Map.of());
+    }
+
     private MarketplaceFetchController newController() {
         // The methods under test never touch the null services — only start() does.
         return new MarketplaceFetchController(null, null, null, tempDir);
@@ -229,8 +234,8 @@ class MarketplaceFetchControllerTest {
             var clone = new RecordingCloneService();
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
-                    return Map.of("a", "owner/a", "b", "owner/b", "c", "owner/c");
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
+                    return pluginMapOf(Map.of("a", "owner/a", "b", "owner/b", "c", "owner/c"));
                 }
             };
             var controller = new MarketplaceFetchController(
@@ -263,8 +268,8 @@ class MarketplaceFetchControllerTest {
             var clone = new RecordingCloneService();
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
-                    return Map.of("a", "owner/a");
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
+                    return pluginMapOf(Map.of("a", "owner/a"));
                 }
             };
             var controller = new MarketplaceFetchController(
@@ -287,8 +292,8 @@ class MarketplaceFetchControllerTest {
             var clone = new RecordingCloneService();
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
-                    return Map.of("a", "owner/a");
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
+                    return pluginMapOf(Map.of("a", "owner/a"));
                 }
             };
             var controller = new MarketplaceFetchController(
@@ -311,7 +316,7 @@ class MarketplaceFetchControllerTest {
             var clone = new RecordingCloneService();
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
                     throw new RuntimeException("buildMap exploded");
                 }
             };
@@ -343,7 +348,7 @@ class MarketplaceFetchControllerTest {
             var clone = new RecordingCloneService();
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
                     throw new IllegalStateException();
                 }
             };
@@ -367,14 +372,14 @@ class MarketplaceFetchControllerTest {
             var buildMapCalls = new java.util.concurrent.atomic.AtomicInteger();
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
                     buildMapCalls.incrementAndGet();
                     try {
                         release.await();
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
-                    return Map.of("a", "owner/a");
+                    return pluginMapOf(Map.of("a", "owner/a"));
                 }
             };
             var controller = new MarketplaceFetchController(
@@ -405,8 +410,8 @@ class MarketplaceFetchControllerTest {
             clone.throwOnInvoke = true;
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
-                    return Map.of("a", "owner/a");
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
+                    return pluginMapOf(Map.of("a", "owner/a"));
                 }
             };
             var controller = new MarketplaceFetchController(
@@ -433,9 +438,9 @@ class MarketplaceFetchControllerTest {
             var buildMapInvoked = new java.util.concurrent.atomic.AtomicBoolean(false);
             var pluginMap = new PluginMapService() {
                 @Override
-                public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+                public PluginMapService.PluginMap buildMap(List<MarketplaceSource> sources) {
                     buildMapInvoked.set(true);
-                    return Map.of();
+                    return PluginMapService.PluginMap.EMPTY;
                 }
             };
             var controller = new MarketplaceFetchController(

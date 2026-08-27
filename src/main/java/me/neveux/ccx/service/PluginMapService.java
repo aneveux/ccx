@@ -46,7 +46,24 @@ public class PluginMapService {
     private final ObjectMapper mapper;
     private final MarketplaceCloneService marketplaceCloneService;
     private final ClaudeMarketplaceRegistryService claudeMarketplaceRegistryService;
-    private volatile Map<String, String> lastDescriptions = Map.of();
+
+    /**
+     * The result of one plugin-map build: the name-to-qualified-name entries and the descriptions
+     * discovered alongside them. The two halves are returned together because they only make sense
+     * as a pair — a caller that got its entries from one build must not pair them with descriptions
+     * from another, which is exactly what a service field holding "the last descriptions" allowed
+     * whenever the TUI render thread and the background fetch thread built concurrently.
+     *
+     * @param entries      plugin name (short or qualified, per the build) to qualified
+     *                     {@code name@marketplace} name; never null
+     * @param descriptions plugin name and qualified name to the description declared in the
+     *                     marketplace manifest, for the plugins that declare one; never null
+     */
+    public record PluginMap(Map<String, String> entries, Map<String, String> descriptions) {
+
+        /** A build that found nothing, used for the sourceless shortcuts. */
+        public static final PluginMap EMPTY = new PluginMap(Map.of(), Map.of());
+    }
 
     public PluginMapService() {
         this.mapper = ObjectMapperConfig.defaultJson();
@@ -79,14 +96,13 @@ public class PluginMapService {
 
         if (cache != null && isFresh(cache)) {
             log.debug("plugin-map cache hit shortName={}", shortName);
-            this.lastDescriptions = cache.descriptions() != null ? cache.descriptions() : Map.of();
             return Optional.ofNullable(cache.entries().get(shortName));
         }
 
         log.debug("plugin-map cache miss or stale — rebuilding shortName={}", shortName);
-        var entries = buildMap(settings);
-        writeCache(cacheFile, entries);
-        return Optional.ofNullable(entries.get(shortName));
+        var pluginMap = buildMap(settings);
+        writeCache(cacheFile, pluginMap);
+        return Optional.ofNullable(pluginMap.entries().get(shortName));
     }
 
     /**
@@ -94,10 +110,10 @@ public class PluginMapService {
      * May perform network operations (git clone/pull) to ensure sources are local.
      *
      * @param settings project settings containing the {@code extraKnownMarketplaces} list
-     * @return map of short plugin name to qualified {@code name@marketplace} name; never null
+     * @return the entries, keyed by short plugin name, and their descriptions; never null
      */
-    public Map<String, String> buildMap(Settings settings) {
-        if (settings.extraKnownMarketplaces() == null) return Map.of();
+    public PluginMap buildMap(Settings settings) {
+        if (settings.extraKnownMarketplaces() == null) return PluginMap.EMPTY;
         return buildMap(settings.extraKnownMarketplaces());
     }
 
@@ -108,11 +124,11 @@ public class PluginMapService {
      *
      * @param project project-level settings
      * @param global  global settings (typically from {@code ~/.claude/settings.json})
-     * @return map of short plugin name to qualified {@code name@marketplace} name; never null
+     * @return the entries, keyed by short plugin name, and their descriptions; never null
      */
-    public Map<String, String> buildMap(Settings project, Settings global) {
+    public PluginMap buildMap(Settings project, Settings global) {
         var merged = mergeSources(project, global);
-        return merged.isEmpty() ? Map.of() : buildMap(merged);
+        return merged.isEmpty() ? PluginMap.EMPTY : buildMap(merged);
     }
 
     /**
@@ -134,25 +150,13 @@ public class PluginMapService {
     }
 
     /**
-     * Returns the description map produced by the most recent {@link #buildMap} or
-     * {@link #buildMapNoFetch} call. Keys are both the short name and the qualified name
-     * for each plugin that declares a description in its manifest. Returns an empty map
-     * if no build has been performed yet or the last marketplace had no descriptions.
-     *
-     * @return map of plugin name / qualified name to human-readable description; never null
-     */
-    public Map<String, String> getLastDescriptions() {
-        return lastDescriptions;
-    }
-
-    /**
      * Builds the plugin map from an explicit list of sources, allowing network access to
      * clone or pull GitHub repositories.
      *
      * @param sources the marketplace sources to scan
-     * @return map of short plugin name to qualified {@code name@marketplace} name; never null
+     * @return the entries, keyed by short plugin name, and their descriptions; never null
      */
-    public Map<String, String> buildMap(List<MarketplaceSource> sources) {
+    public PluginMap buildMap(List<MarketplaceSource> sources) {
         return buildMap(sources, true, false);
     }
 
@@ -161,16 +165,16 @@ public class PluginMapService {
      * github sources are read from their existing local clone only (never cloned/pulled here).
      * Safe to call on the render thread; github plugins appear once a background refresh has
      * cloned them.
-     * Returns qualified names (pluginName@marketplaceKey) as map keys.
+     * Returns qualified names (pluginName@marketplaceKey) as entry keys.
      */
-    public Map<String, String> buildMapNoFetch(List<MarketplaceSource> sources) {
+    public PluginMap buildMapNoFetch(List<MarketplaceSource> sources) {
         return buildMap(sources, false, true);
     }
 
-    private Map<String, String> buildMap(List<MarketplaceSource> sources, boolean allowFetch, boolean useQualifiedKeys) {
+    private PluginMap buildMap(List<MarketplaceSource> sources, boolean allowFetch, boolean useQualifiedKeys) {
         var result = new HashMap<String, String>();
         var descriptionMap = new HashMap<String, String>();
-        if (sources == null) return result;
+        if (sources == null) return PluginMap.EMPTY;
 
         // Claude Code's registry wins over the declared descriptor: its clones are already
         // local and already authenticated, so a private github marketplace resolves here even
@@ -244,8 +248,7 @@ public class PluginMapService {
             }
         }
 
-        this.lastDescriptions = descriptionMap;
-        return result;
+        return new PluginMap(result, descriptionMap);
     }
 
     private PluginMapCache loadCache(Path cacheFile) {
@@ -268,9 +271,11 @@ public class PluginMapService {
         return cache.generatedAt().isAfter(Instant.now().minus(MarketplaceCloneService.CACHE_TTL));
     }
 
-    private void writeCache(Path cacheFile, Map<String, String> entries) {
+    private void writeCache(Path cacheFile, PluginMap pluginMap) {
         try {
-            var cache = new PluginMapCache(Instant.now(), entries, lastDescriptions.isEmpty() ? null : lastDescriptions);
+            var descriptions = pluginMap.descriptions();
+            var cache = new PluginMapCache(Instant.now(), pluginMap.entries(),
+                descriptions.isEmpty() ? null : descriptions);
             FileUtils.atomicWrite(cacheFile, tmp -> mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), cache));
             log.debug("plugin-map cache written path={}", cacheFile);
         } catch (IOException e) {

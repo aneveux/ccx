@@ -158,7 +158,7 @@ public class PluginsCommand implements Runnable {
             var globalPlugins = pluginKeys(globalSettings);
 
             // All known plugins from marketplace scan (project + global sources merged)
-            var marketplacePlugins = new LinkedHashSet<>(pluginMapService.buildMap(projectSettings, globalSettings).values());
+            var marketplacePlugins = new LinkedHashSet<>(pluginMapService.buildMap(projectSettings, globalSettings).entries().values());
 
             var all = new TreeSet<String>();
             all.addAll(projectPlugins);
@@ -546,12 +546,12 @@ public class PluginsCommand implements Runnable {
                 globalSettings.extraKnownMarketplaces().forEach(s -> { if (s.key() != null) tags.add(s.key()); });
             }
             // Also extract @source suffixes from all known qualified plugin names
-            var allQualified = pluginMapService.buildMap(projectSettings).values();
+            var allQualified = pluginMapService.buildMap(projectSettings).entries().values();
             for (var qualified : allQualified) {
                 var atIdx = qualified.indexOf('@');
                 if (atIdx >= 0) tags.add(qualified.substring(atIdx + 1));
             }
-            var allQualifiedGlobal = pluginMapService.buildMap(globalSettings).values();
+            var allQualifiedGlobal = pluginMapService.buildMap(globalSettings).entries().values();
             for (var qualified : allQualifiedGlobal) {
                 var atIdx = qualified.indexOf('@');
                 if (atIdx >= 0) tags.add(qualified.substring(atIdx + 1));

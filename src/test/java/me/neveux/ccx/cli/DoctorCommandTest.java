@@ -23,6 +23,7 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -429,6 +430,55 @@ class DoctorCommandTest {
                 .as("doctor must not check for .claudeignore — "
                     + "ignore patterns now live in permissions.deny, not a separate file")
                 .doesNotContain(".claudeignore");
+        }
+    }
+
+    @Nested
+    @DisplayName("Plan 050 B2 — PATH dependency check")
+    class WhenProbingPath {
+
+        private boolean hasError;
+
+        private String reportFor(DoctorCommand.PathProbe probe) {
+            var out = new ByteArrayOutputStream();
+            var writer = new PrintWriter(out, true);
+            hasError = new DoctorCommand().checkDependencies(writer, probe);
+            writer.flush();
+            return out.toString();
+        }
+
+        @Test
+        @DisplayName("a probe that never answers is reported as unchecked, not as a missing tool")
+        void checkDependencies_whenProbeTimesOut_reportsUncheckedAndDoesNotFail() {
+            var report = reportFor(tool -> {
+                throw new IOException("command timed out after 5s: [which, " + tool + "]");
+            });
+
+            assertThat(report)
+                .as("a bounded probe that gave up must say so — the old unbounded waitFor() just hung")
+                .contains("[INFO] could not check git on PATH")
+                .contains("[INFO] could not check jq on PATH")
+                .contains("[INFO] could not check yq on PATH");
+            assertThat(report)
+                .as("\"we could not look\" must not be reported as \"the tool is absent\"")
+                .doesNotContain("not found on PATH");
+            assertThat(hasError)
+                .as("an unanswerable probe is advisory: it must not fail doctor the way a missing git does")
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("a probe reporting git absent still fails doctor")
+        void checkDependencies_whenGitAbsent_reportsWarningAndFails() {
+            var report = reportFor(tool -> !"git".equals(tool));
+
+            assertThat(report)
+                .as("a definite absence keeps its severity, unlike a probe that could not answer")
+                .contains("[WARNING] git not found on PATH")
+                .contains("[OK] jq found on PATH");
+            assertThat(hasError)
+                .as("git is the one required tool, so its absence must still fail doctor")
+                .isTrue();
         }
     }
 

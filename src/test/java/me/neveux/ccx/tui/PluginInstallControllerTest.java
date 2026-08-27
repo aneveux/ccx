@@ -43,12 +43,14 @@ class PluginInstallControllerTest {
     private static class RecordingInstallService extends ClaudePluginInstallService {
         private final List<String> installed = new CopyOnWriteArrayList<>();
         private final List<Path> workingDirs = new CopyOnWriteArrayList<>();
+        private final List<Thread> installThreads = new CopyOnWriteArrayList<>();
         private InstallResult result = new InstallResult(Status.INSTALLED, "installed");
 
         @Override
         public InstallResult install(String qualifiedName, Path projectRoot) {
             installed.add(qualifiedName);
             workingDirs.add(projectRoot);
+            installThreads.add(Thread.currentThread());
             return result;
         }
     }
@@ -58,6 +60,8 @@ class PluginInstallControllerTest {
     private StubRegistryService registryService;
     private RecordingInstallService installService;
     private final List<String> statusMessages = new CopyOnWriteArrayList<>();
+    /** Every controller a test built, so none of their install threads outlives the test. */
+    private final List<PluginInstallController> controllers = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() throws IOException {
@@ -66,10 +70,12 @@ class PluginInstallControllerTest {
         registryService = new StubRegistryService();
         installService = new RecordingInstallService();
         statusMessages.clear();
+        controllers.clear();
     }
 
     @AfterEach
     void tearDown() throws IOException {
+        controllers.forEach(PluginInstallController::close);
         try (var paths = Files.walk(projectDir)) {
             paths.sorted(Comparator.reverseOrder()).forEach(path -> {
                 try {
@@ -82,8 +88,10 @@ class PluginInstallControllerTest {
     }
 
     private PluginInstallController controller() {
-        return new PluginInstallController(settingsService, registryService, installService, projectDir,
+        var controller = new PluginInstallController(settingsService, registryService, installService, projectDir,
             (message, seconds) -> statusMessages.add(message));
+        controllers.add(controller);
+        return controller;
     }
 
     @Test
@@ -202,6 +210,46 @@ class PluginInstallControllerTest {
         assertThat(controller.consumeRefreshPending())
             .as("no install means no reason to rebuild the snapshot")
             .isFalse();
+    }
+
+    @Test
+    @DisplayName("close should end the install thread instead of parking it for the JVM's lifetime")
+    void close_terminatesTheInstallThread() throws InterruptedException {
+        registryService.missing = List.of("slack@mkt");
+        var controller = controller();
+
+        controller.installPlugin("slack@mkt");
+        controller.awaitQuiescence(WAIT_MILLIS);
+        var installThread = installService.installThreads.getFirst();
+
+        assertThat(installThread.isAlive())
+            .as("the single install thread stays parked between installs while the controller is open")
+            .isTrue();
+
+        controller.close();
+        installThread.join(WAIT_MILLIS);
+
+        assertThat(installThread.isAlive())
+            .as("a closed controller must release its install thread — one leaked per TUI session before")
+            .isFalse();
+    }
+
+    @Test
+    @DisplayName("a controller reused after close installs again on a fresh thread")
+    void installPlugin_afterClose_stillInstalls() {
+        registryService.missing = List.of("slack@mkt", "jira@mkt");
+        var controller = controller();
+
+        controller.installPlugin("slack@mkt");
+        controller.awaitQuiescence(WAIT_MILLIS);
+        controller.close();
+
+        controller.installPlugin("jira@mkt");
+        controller.awaitQuiescence(WAIT_MILLIS);
+
+        assertThat(installService.installed)
+            .as("close must not reject later work — the executor is lazily recreated")
+            .containsExactly("slack@mkt", "jira@mkt");
     }
 
     @Test

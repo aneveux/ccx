@@ -5,6 +5,7 @@ import me.neveux.ccx.model.Settings;
 import me.neveux.ccx.service.CcxConfigService;
 import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
+import me.neveux.ccx.service.ConfigWriteException;
 import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.ProfileApplyService;
 import me.neveux.ccx.service.ProfileLifecycleService;
@@ -310,6 +311,57 @@ class TuiActionsTest {
             assertThat(snap.stacks())
                 .as("existing stacks must be preserved when removing a non-existent line")
                 .contains("@~/.claude/stacks/java.md");
+        }
+    }
+
+    @Nested
+    @DisplayName("Plan 050 B4 — when the CLAUDE.md write fails")
+    class WhenClaudeMdWriteFails {
+
+        private static final String FAILURE = "Failed to write CLAUDE.md at .claude/CLAUDE.md";
+
+        /** A CLAUDE.md service that refuses every write, the way a read-only checkout does. */
+        private TuiActions actionsThatCannotWrite() {
+            var refusingService = new ClaudeMdService() {
+                @Override
+                public void writeMarkerBlock(Path claudeMdFile, List<String> stackLines) {
+                    throw new ConfigWriteException(FAILURE, new IOException("read-only file system"));
+                }
+            };
+            return new TuiActions(settingsService, refusingService, tuiDataService,
+                new ProfileLifecycleService());
+        }
+
+        @Test
+        @DisplayName("addStack reports the failure in lastError instead of killing the render thread")
+        void addStack_whenWriteFails_setsLastErrorAndStillReturnsASnapshot() {
+            var failingActions = actionsThatCannotWrite();
+
+            var snapshot = failingActions.addStack("@~/.claude/stacks/go.md", projectDir);
+
+            assertThat(snapshot)
+                .as("an unhandled write failure would propagate out of the event handler and end the TUI")
+                .isNotNull();
+            assertThat(failingActions.consumeLastError())
+                .as("the footer must show why the stack line did not stick")
+                .isEqualTo(FAILURE);
+        }
+
+        @Test
+        @DisplayName("removeStack reports the failure in lastError instead of killing the render thread")
+        void removeStack_whenWriteFails_setsLastErrorAndStillReturnsASnapshot() throws Exception {
+            Files.writeString(projectDir.resolve(".claude/CLAUDE.md"),
+                "<!-- ccx:begin -->\n@~/.claude/stacks/java.md\n<!-- ccx:end -->\n");
+            var failingActions = actionsThatCannotWrite();
+
+            var snapshot = failingActions.removeStack("@~/.claude/stacks/java.md", projectDir);
+
+            assertThat(snapshot)
+                .as("an unhandled write failure would propagate out of the event handler and end the TUI")
+                .isNotNull();
+            assertThat(failingActions.consumeLastError())
+                .as("the footer must show why the stack line is still there")
+                .isEqualTo(FAILURE);
         }
     }
 

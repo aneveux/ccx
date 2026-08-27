@@ -9,6 +9,7 @@ import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
 import me.neveux.ccx.tui.Quips;
+import me.neveux.ccx.util.ProcessRunner;
 import io.quarkus.arc.Unremovable;
 import jakarta.enterprise.context.Dependent;
 import jakarta.inject.Inject;
@@ -44,6 +45,9 @@ import java.util.stream.Collectors;
 public class DoctorCommand implements Callable<Integer> {
 
     private static final Logger log = LoggerFactory.getLogger(DoctorCommand.class);
+
+    /** Long enough for a cold PATH lookup, short enough that a wedged one does not hang doctor. */
+    private static final int PATH_PROBE_TIMEOUT_SECONDS = 5;
 
     private final SettingsService settingsService;
     private final PluginMapService pluginMapService;
@@ -173,7 +177,7 @@ public class DoctorCommand implements Callable<Integer> {
             return false;
         }
         var marketplaceMap = (hasMarketplaces(settings) || hasMarketplaces(globalSettings))
-            ? pluginMapService.buildMap(settings, globalSettings)
+            ? pluginMapService.buildMap(settings, globalSettings).entries()
             : null;
         settings.enabledPlugins().forEach((pluginKey, enabled) -> {
             if (!enabled) {
@@ -231,21 +235,25 @@ public class DoctorCommand implements Callable<Integer> {
         }
     }
 
+    /** Answers whether {@code tool} is on the PATH, or throws when the probe itself could not run. */
+    @FunctionalInterface
+    interface PathProbe {
+        boolean isOnPath(String tool) throws IOException;
+    }
+
     private boolean checkDependencies(PrintWriter out) {
+        return checkDependencies(out, DoctorCommand::isOnPath);
+    }
+
+    /**
+     * Package-private overload taking the probe, so a test can drive the branch where the probe
+     * never answers — a real wedged PATH lookup is not reproducible on demand.
+     */
+    boolean checkDependencies(PrintWriter out, PathProbe probe) {
         var hasError = false;
         for (var tool : List.of("git", "jq", "yq")) {
             try {
-                boolean found;
-                var proc = new ProcessBuilder("which", tool)
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                        .redirectError(ProcessBuilder.Redirect.DISCARD)
-                        .start();
-                try {
-                    found = proc.waitFor() == 0;
-                } finally {
-                    proc.destroy();
-                }
-                if (found) {
+                if (probe.isOnPath(tool)) {
                     emit(out, "[OK] " + tool + " found on PATH");
                 } else {
                     var level = "git".equals(tool) ? "[WARNING]" : "[INFO]";
@@ -253,13 +261,22 @@ public class DoctorCommand implements Callable<Integer> {
                     if ("git".equals(tool)) hasError = true;
                 }
             } catch (IOException e) {
-                emit(out, "[INFO] could not check " + tool + " on PATH");
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                log.warn("PATH probe failed tool={}", tool, e);
                 emit(out, "[INFO] could not check " + tool + " on PATH");
             }
         }
         return hasError;
+    }
+
+    /**
+     * Runs {@code which <tool>} through {@link ProcessRunner} so the wait is bounded. A plain
+     * {@code Process.waitFor()} has no timeout, and a PATH entry that stopped answering — a dead
+     * automount, an unresponsive network mount — left {@code ccx doctor} hanging with no output.
+     *
+     * @throws IOException if the probe cannot be started, times out, or is interrupted
+     */
+    private static boolean isOnPath(String tool) throws IOException {
+        return ProcessRunner.run(List.of("which", tool), null, null, PATH_PROBE_TIMEOUT_SECONDS).isSuccess();
     }
 
     /**

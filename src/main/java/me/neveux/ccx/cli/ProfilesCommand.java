@@ -6,6 +6,7 @@ import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudePluginInstallService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.util.FileUtils;
+import me.neveux.ccx.service.ProfileCycleException;
 import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.ProfileNotFoundException;
 import me.neveux.ccx.service.ProfileService;
@@ -253,6 +254,10 @@ public class ProfilesCommand implements Runnable {
                 return 0;
             } catch (ProfileNotFoundException e) {
                 spec.commandLine().getErr().println("Profile '" + name + "' not found. Run `ccx profiles list` to see available profiles, or `ccx profiles new " + name + "` to create one.");
+                return 1;
+            } catch (ProfileCycleException e) {
+                spec.commandLine().getErr().println("Profile '" + name + "' has a circular `extends` chain and cannot be resolved: "
+                    + e.getMessage() + ". Edit the profile.yaml files to break the cycle.");
                 return 1;
             } catch (IOException e) {
                 spec.commandLine().getErr().println("Failed to record profile state (context.json may be corrupted): " + e.getMessage());

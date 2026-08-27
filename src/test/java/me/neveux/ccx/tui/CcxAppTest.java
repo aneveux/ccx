@@ -15,6 +15,7 @@ import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.MarketplaceCloneService;
 import me.neveux.ccx.service.ProfileLifecycleService;
 import me.neveux.ccx.service.SettingsService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -178,6 +179,16 @@ class CcxAppTest {
     void setUp() {
         settingsService = new InMemorySettingsService();
         lifecycleService = new StubLifecycleService();
+    }
+
+    /**
+     * Every test builds its own controller, and {@link CcxApp#run()} — the production path that
+     * closes it — is never reached headlessly, so without this each test would leave an install
+     * thread behind for the rest of the suite.
+     */
+    @AfterEach
+    void closeInstallController() {
+        if (pluginInstall != null) pluginInstall.close();
     }
 
     @Nested
