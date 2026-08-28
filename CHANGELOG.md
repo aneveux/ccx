@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `.claude/settings.json` and `.ccx/context.json` are now created mode `600`. Both can carry
+  credentials — settings round-trips MCP `env` and `headers` blocks, and the context file
+  records profile `env` values — and were previously created at the process umask default,
+  commonly `664`. An **existing** file keeps whatever mode it has: ccx will not narrow a file
+  someone widened on purpose. Every other file ccx writes still follows the umask.
+
+### Added
+
+- `ccx doctor` reports `.claude/settings.json` or `.ccx/context.json` being readable beyond
+  its owner, with the `chmod` to run. Advisory: it does not change the exit code, so a file
+  created by an earlier ccx cannot fail an existing pipeline.
+- `ccx doctor` reports an enabled profile whose `extends` chain is circular, instead of
+  skipping it silently.
+
+### Fixed
+
+- `ccx profiles show`, `ccx profiles reinstall` and `ccx profiles status` no longer print a
+  Java stack trace when a profile's `extends` chain is circular. `show` and `reinstall` print
+  the cycle and exit 1; `status` renders the profile `[BROKEN]`, explains why on stderr, and
+  keeps listing the remaining profiles.
+- Atomic writes no longer create a `.ccx-mode-probe` file to work out the umask, and no longer
+  cache the result in a static field. The scratch file the write is staged in is created with
+  no explicit mode, so the kernel applies the umask itself.
+
 ## [0.5.0] - 2026-08-28
 
 ### Changed

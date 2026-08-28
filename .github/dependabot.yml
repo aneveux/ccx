@@ -18,8 +18,13 @@ updates:
       # terminal provider GraalVM 25 native-image cannot compile: the points-to analysis dies
       # in `org.jline.terminal.impl.ffm.CLibrary` on the `linkToNative` polymorphic signature.
       # Confirmed on 4.2.1 (local), 4.3.1 (PR #2) and 3.30.16 (PR #3) — so this is not a
-      # major-version boundary and an upper bound like '>=4' does not hold. Re-evaluate when
-      # tamboui changes backend or when a newer GraalVM learns to parse `linkToNative`.
+      # major-version boundary and an upper bound like '>=4' does not hold.
+      #
+      # An unbounded `ignore` suppresses security-update PRs too, not just version-update ones,
+      # so a jline CVE will not arrive here as a pull request — remediation is manual (unpin,
+      # verify `mvn -Dnative package`, release). SECURITY.md records this as a known tradeoff.
+      # Revisit when tamboui changes backend, or when a GraalVM release can compile
+      # `linkToNative` — either one lets the pin go and takes the tradeoff with it.
       - dependency-name: org.jline:jline
 
   # Actions are SHA-pinned, so dependabot is the only thing that will ever move them: it rewrites

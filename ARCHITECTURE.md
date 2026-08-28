@@ -19,7 +19,7 @@ Key services:
 - `ProfileLifecycleService` — the enable/disable/reinstall lifecycle of a profile in a project (extends closure, already-enabled skipping, snapshot revert), shared by `ProfilesCommand` and the TUI so both answer "what does enabling do" identically; installing plugins is left to the caller
 - `CcxContextService` — manages `.ccx/context.json` lock file tracking which profiles are enabled and their installation snapshot; provides drift detection
 - `ClaudeMdService` — reads/writes the `<!-- ccx:begin -->`…`<!-- ccx:end -->` marker block in `CLAUDE.md`
-- `PluginMapService` — discovers and maps plugin short names to qualified keys from marketplace directories
+- `PluginMapService` — discovers and maps plugin short names to qualified keys from marketplace directories; returns a `PluginMap` record (`entries` = short name → qualified key, `descriptions` = short name → marketplace description). `buildMap` may clone or pull a marketplace and must never run on the TUI render thread; `buildMapNoFetch` is the render-safe variant
 - `SkillsService` — discovers skills from configured marketplace paths
 - `MarketplaceCloneService` — clones/pulls marketplace plugin repositories for offline discovery
 - `ClaudeMarketplaceRegistryService` — read-only view of Claude Code's `~/.claude/plugins/known_marketplaces.json`: supplies the local directory of a marketplace Claude Code already knows, so plugin short-name resolution and skill discovery work without a ccx-declared path (0.3.2)
@@ -42,7 +42,7 @@ Tamboui-based interactive terminal dashboard launched by `TuiCommand`. Architect
 - `CcxApp` — top-level Tamboui application; owns `TuiState` and `TuiActions`; dispatches key events
 - `TuiState` — mutable state: active tab, selected rows, filter focus, snapshot reference
 - `TuiActions` — non-CDI plain Java object; the only TUI class that mutates project state; delegates to services
-- `PluginInstallController` — dispatches `claude plugin install` to a single background daemon thread so the render thread never blocks on a subprocess; publishes progress to the footer and flags a snapshot rebuild when done
+- `PluginInstallController` — dispatches `claude plugin install` to a single background daemon thread so the render thread never blocks on a subprocess; publishes progress to the footer and flags a snapshot rebuild when done. Implements `AutoCloseable` to shut that thread down, and `CcxApp.run()` owns it in the same try-with-resources as the Tamboui runner, so leaving the TUI never leaves the executor behind
 - `FilterState` — per-tab filter state wrapping Tamboui `TextInputState`
 - Tab classes (`tabs/`) — pure renderers implementing `FilterableTab<T>`; no service injection; no state mutation
 
@@ -50,13 +50,23 @@ Tamboui-based interactive terminal dashboard launched by `TuiCommand`. Architect
 `NativeConfig` registers classes that require reflection at build time via `@RegisterForReflection`. Also declares `initialize-at-run-time` entries for JLine/JNA native backend classes that cannot be initialized at image build time.
 
 ### Util (`me.neveux.ccx.util`)
-Stateless static helpers: `FileUtils.atomicWrite` (write-to-.tmp then `Files.move ATOMIC_MOVE`),
-`ListUtils.orderedUnion` (null-safe ordered dedup of two lists), and
-`IgnorePatterns.toReadDenyRule` (profile `ignore:` pattern → `permissions.deny` rule, shared by
-`ProfileApplyService` and `CcxContextService` so apply and drift detection cannot disagree), and
-`ProcessRunner.run` (hardened subprocess execution: argv list never a shell string, merged stderr,
-virtual-thread output drain to avoid a pipe-buffer deadlock, bounded timeout + `destroyForcibly`;
-shared by `MarketplaceCloneService` and `ClaudePluginInstallService`).
+Stateless static helpers — no class in this package holds mutable state:
+- `FileUtils.atomicWrite` — populates an unpredictably named `.tmp` sibling created with
+  `O_EXCL`, then `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`. A newly created file gets the
+  process umask default, because the scratch file is created with no explicit mode and the
+  kernel applies the umask to 0666 itself.
+- `FileUtils.atomicWriteOwnerOnly` — same contract, but a target being created for the first
+  time is created mode 600. Used for the two files that can carry credentials
+  (`.claude/settings.json`, `.ccx/context.json`). Neither mode ever changes the mode of a file
+  that already exists: the scratch file inherits the existing target's mode so the
+  `ATOMIC_MOVE` preserves it. See SECURITY.md § File permissions.
+- `ListUtils.orderedUnion` — null-safe ordered dedup of two lists
+- `IgnorePatterns.toReadDenyRule` — profile `ignore:` pattern → `permissions.deny` rule, shared
+  by `ProfileApplyService` and `CcxContextService` so apply and drift detection cannot disagree
+- `ProcessRunner.run` — hardened subprocess execution: argv list never a shell string, merged
+  stderr, virtual-thread output drain to avoid a pipe-buffer deadlock, bounded timeout +
+  `destroyForcibly`; shared by `MarketplaceCloneService`, `ClaudePluginInstallService` and
+  `DoctorCommand`'s PATH probe
 
 ### Config (`me.neveux.ccx.config`)
 CDI producer class `ObjectMapperConfig`: produces `@Named("jsonMapper")` (Jackson JSON) and
@@ -75,7 +85,10 @@ cli/
   McpCommand         → SettingsService
   ClaudeMdCommand    → ClaudeMdService, CcxConfigService
   DoctorCommand      → SettingsService, PluginMapService, ClaudeMdService, CcxConfigService, ProfileService,
-                        CcxContextService, ClaudePluginRegistryService
+                        CcxContextService, ClaudePluginRegistryService, ProcessRunner (PATH probe)
+                     (`PathProbe` is a package-private functional interface seam: the production
+                      probe shells out to `which`, and a test substitutes one that never answers,
+                      which is the only way to exercise the probe-timeout branch)
   StatusCommand      → SettingsService, ClaudeMdService
   CleanCommand       → SettingsService, ClaudeMdService
   ConfigCommand      → CcxConfigService
@@ -134,7 +147,7 @@ runner type — may be imported from `tui`, except by `TuiCommand`, which instan
    - Reads `.ccx/context.json`
    - Adds the profile record with timestamp + snapshot
    - Writes `.ccx/context.json` atomically
-6. `PluginsCommand.installMissingPlugins(dir)` → `ClaudePluginInstallService.installAll(...)` for every enabled plugin Claude Code has not installed for this project, spawning `claude plugin install <plugin>@<marketplace> --scope project` in the project dir via `util/ProcessRunner`. This is the only step that runs an external binary; a missing `claude` binary or a failed install prints a warning and leaves the exit code at 0 (ADR-015)
+6. `PluginsCommand.installMissingPlugins(dir)` → `ClaudePluginInstallService.installAll(...)` for every enabled plugin Claude Code has not installed for this project, spawning `claude plugin install <plugin>@<marketplace> --scope project` in the project dir via `util/ProcessRunner`. This is the only step in *this* flow that runs an external binary (`DoctorCommand` and `MarketplaceCloneService` also spawn subprocesses, in theirs); a missing `claude` binary or a failed install prints a warning and leaves the exit code at 0 (ADR-015)
 7. list/confirmation commands print to stdout via the picocli `PrintWriter` + `out.flush()` (the `InlineRenderer` interactive path was removed in plan 036 Wave 3)
 
 ### TUI refresh after action (e.g. pressing `Enter` on Profiles tab)
@@ -148,7 +161,7 @@ runner type — may be imported from `tui`, except by `TuiCommand`, which instan
 
 ## Boundaries
 
-- **CLI layer delegates business logic to services** — edge-case commands (`CleanCommand`, `ProfilesCommand.NewCommand`, `ConfigCommand`) do direct atomic writes/deletes where no service boundary is warranted; all other I/O goes through services
+- **CLI layer delegates business logic to services** — edge-case commands (`CleanCommand`, `ProfilesCommand.NewCommand`, `ConfigCommand`) do direct atomic writes/deletes where no service boundary is warranted; `DoctorCommand` reaches `util/ProcessRunner` directly for its `which <tool>` PATH probe, since a diagnostic that only reports has no state for a service to own; all other I/O goes through services
 - **Tab classes are pure renderers** — no service injection, no file I/O, no state mutation
 - **`TuiActions` is the only TUI class that mutates project state** — all other TUI classes are read-only
 - **All file writes are atomic** — write to `.tmp` sibling, then `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`

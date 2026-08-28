@@ -147,19 +147,6 @@ where Tamboui adds friction without value.
 
 ---
 
-## ADR-012: `budget`, `spawn`, and `clean` commands deferred indefinitely
-
-**Date:** 2026-06-17
-**Status:** accepted
-
-**Context:** The original ccx has `budget` (token estimation), `spawn` (ephemeral sessions), and `clean` (remove ccx config) commands. The TUI backlog also had entries for a Compose tab and TUI coverage of these commands.
-
-**Decision:** `budget` and `spawn` are deferred indefinitely — do not implement unless explicitly requested. `clean` has no TUI tab and that is intentional — it is a destructive one-off operation not suited to an interactive panel. The CLAUDE.md tab in the TUI covers the compose/stack use case. These items are not tracked as open backlog items.
-
-**Consequences:** Reduces scope. If any of these are needed later, they should be explicitly requested and planned.
-
----
-
 ## ADR-011: `InlineApp` for styled CLI output with TTY guard
 
 **Date:** 2026-06-12
@@ -170,6 +157,19 @@ where Tamboui adds friction without value.
 **Decision:** `InlineRenderer` uses Tamboui `InlineApp`/`InlineToolkitRunner` for styled output when a TTY is available (`System.console() != null && CI != "1"`). All render methods accept a `Runnable fallback` that writes plain text via the Picocli `PrintWriter`. A null fallback does nothing (callers that do not need a fallback can omit it via the 3-arg/5-arg overloads).
 
 **Consequences:** Tests capture output via the Picocli `PrintWriter` — the fallback path — so styled output never pollutes test assertions. The TTY guard prevents JLine from emitting escape sequences to redirected output.
+
+---
+
+## ADR-012: `budget`, `spawn`, and `clean` commands deferred indefinitely
+
+**Date:** 2026-06-17
+**Status:** accepted
+
+**Context:** The original ccx has `budget` (token estimation), `spawn` (ephemeral sessions), and `clean` (remove ccx config) commands. The TUI backlog also had entries for a Compose tab and TUI coverage of these commands.
+
+**Decision:** `budget` and `spawn` are deferred indefinitely — do not implement unless explicitly requested. `clean` has no TUI tab and that is intentional — it is a destructive one-off operation not suited to an interactive panel. The CLAUDE.md tab in the TUI covers the compose/stack use case. These items are not tracked as open backlog items.
+
+**Consequences:** Reduces scope. If any of these are needed later, they should be explicitly requested and planned.
 
 ---
 

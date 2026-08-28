@@ -139,6 +139,14 @@
             <artifactId>tamboui-toolkit</artifactId>
         </dependency>
 
+        <!-- Three different pinning styles below, on purpose:
+             - jline is pinned in <dependencyManagement> because it is transitive (tamboui pulls it
+               in) — only dependencyManagement overrides a version this project never declares.
+             - jansi carries an inline <version> because it is a direct dependency here and no BOM
+               in scope manages it; a property + inline version is the whole pin.
+             - jna has no version at all: the Quarkus BOM manages it, and it is the version the
+               native build was verified against. Do not pin it — that would silently diverge from
+               the platform on the next Quarkus bump. -->
         <!-- JNA stubs so GraalVM native-image can parse JLine's bundled native providers -->
         <dependency>
             <groupId>net.java.dev.jna</groupId>
