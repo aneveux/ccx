@@ -35,7 +35,7 @@ The installer downloads the latest Linux x86_64 binary, **verifies its SHA-256
 checksum before installing (fail-closed — it aborts on a missing or mismatched
 checksum)**, then moves the binary into the install directory. Set
 `CCX_SKIP_CHECKSUM=1` only if you understand the risk. Pin a specific release with
-`CCX_VERSION` (a tag such as `v0.4.0`; defaults to `latest`).
+`CCX_VERSION` (a tag such as `v0.6.0`; defaults to `latest`).
 
 Or download a binary directly from [Releases](https://github.com/aneveux/ccx/releases/latest).
 
