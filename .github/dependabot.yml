@@ -14,13 +14,13 @@ updates:
         patterns:
           - '*'
     ignore:
-      # jline 4.x ships an FFM terminal provider native-image cannot compile:
-      # `org.jline.terminal.impl.ffm.CLibrary.isTty` uses the `linkToNative` polymorphic
-      # signature and the points-to analysis dies on it (reproduced on 4.2.1 and 4.3.1,
-      # PR #2). The pom pins 3.25.1 for that reason — see the comment there. Drop this
-      # entry once tamboui ships a jline 4 backend.
+      # jline is frozen at 3.25.1 (see the pom comment). Every version above it ships an FFM
+      # terminal provider GraalVM 25 native-image cannot compile: the points-to analysis dies
+      # in `org.jline.terminal.impl.ffm.CLibrary` on the `linkToNative` polymorphic signature.
+      # Confirmed on 4.2.1 (local), 4.3.1 (PR #2) and 3.30.16 (PR #3) — so this is not a
+      # major-version boundary and an upper bound like '>=4' does not hold. Re-evaluate when
+      # tamboui changes backend or when a newer GraalVM learns to parse `linkToNative`.
       - dependency-name: org.jline:jline
-        versions: ['>=4']
 
   # Actions are SHA-pinned, so dependabot is the only thing that will ever move them: it rewrites
   # both the SHA and the trailing `# vX.Y.Z` comment.
