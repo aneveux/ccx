@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-28
+
 ### Changed
 
 - **Breaking.** `ccx clean` no longer modifies anything without `--force`. A bare
@@ -31,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either would fail the command.
 - Both CI workflows pin GraalVM 25.0.2 exactly rather than asking for whatever 25.x is
   current, so a release binary is reproducible.
+- The log file moved from `/tmp/ccx.log` to
+  `${XDG_STATE_HOME:-~/.local/state}/ccx/ccx.log`, and its default level dropped from
+  `DEBUG` to `INFO`. A fixed name in a world-writable directory could be pre-created or
+  symlinked by any local account. Set `QUARKUS_LOG_FILE_PATH` to override.
+- A bare `ccx` now validates `--project-dir` against the allowed roots before reading
+  anything, and exits 1 on rejection like every subcommand already did.
+- Quarkus 3.37.2 → 3.39.1, with the Maven compiler, Surefire and Failsafe plugins and the
+  Jansi stub brought current, and the JNA pin dropped in favour of the platform-tested
+  version. JLine is held at 3.25.1: the 4.x line ships an FFM terminal provider GraalVM
+  native-image cannot compile.
+- Every third-party GitHub Action in both workflows is pinned by commit SHA rather than a
+  floating major tag, so the toolchain that builds a release cannot change under it.
 
 ### Fixed
 
@@ -63,6 +77,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half-cleaned project is worse than a refused clean.
 - The TUI Overview tab distinguishes an unreadable `.claude/settings.json` from an empty
   one; it previously rendered zeroes, reading as "nothing is configured here".
+- `ccx doctor` can no longer hang forever. Its `git` / `claude` PATH probe ran with no
+  timeout, and the cleanup that would have killed a wedged probe sat after the wait, so it
+  never ran. The probe now times out and reports `[INFO] could not check <tool> on PATH`.
+- A TUI plugin or MCP toggle no longer reorders the keys in `settings.json`. Two mutation
+  sites copied into a `HashMap`, so a single toggle rewrote the whole file in hash order —
+  a large spurious diff in a file that is usually committed.
+- A failed `claude plugin install` reports why. When reading the subprocess output timed
+  out, the CLI output — the only diagnostic the user ever sees — was returned as an empty
+  string, indistinguishable from a command that printed nothing.
+- Adding or removing a CLAUDE.md stack in the TUI no longer kills the session when
+  `.claude/CLAUDE.md` cannot be written. The failure now surfaces in the TUI error line,
+  matching the plugin and MCP toggles.
+- `ccx profiles enable` on a profile with a circular `extends` chain prints a one-line
+  error naming the cycle instead of a raw stack trace.
+- Plugin descriptions can no longer come from a different marketplace fetch than the
+  plugin list they are rendered against. The two were returned through separate calls
+  against shared mutable state, so a concurrent TUI refresh could mix them and the cache
+  could persist a mismatched pair.
+- Claude Code CLI discovery requires the executable bit. A non-executable `claude` on
+  `PATH` was accepted and failed later at spawn time with a worse message; it is now
+  rejected in favour of the next candidate.
+- Commands contributed by a profile are applied in a deterministic order rather than
+  whatever order the filesystem returned.
+- The TUI no longer leaks a background thread per session: the plugin-install executor is
+  shut down when the dashboard exits.
 
 ## [0.4.0] - 2026-08-27
 
@@ -188,7 +227,8 @@ Initial release.
 - Atomic, path-security-checked file writes for all managed configuration.
 - `install.sh` for one-line installation into `~/.local/bin`.
 
-[Unreleased]: https://github.com/aneveux/ccx/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/aneveux/ccx/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/aneveux/ccx/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aneveux/ccx/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/aneveux/ccx/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/aneveux/ccx/compare/v0.3.0...v0.3.1
