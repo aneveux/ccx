@@ -6,6 +6,7 @@ import me.neveux.ccx.service.CcxContextService;
 import me.neveux.ccx.service.ClaudeMdService;
 import me.neveux.ccx.service.ClaudePluginRegistryService;
 import me.neveux.ccx.service.PluginMapService;
+import me.neveux.ccx.service.ProfileCycleException;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
 import me.neveux.ccx.tui.Quips;
@@ -23,7 +24,9 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
@@ -109,6 +112,7 @@ public class DoctorCommand implements Callable<Integer> {
             checkSkillOverrides(settingsResult.settings(), out);
             checkRulesDir(dir, out);
         }
+        checkCredentialFileModes(dir, out);
         hasErrors |= checkDependencies(out);
         hasErrors |= reportGlobalSettings(globalResult, out);
         hasErrors |= checkCcxConfig(out);
@@ -334,6 +338,46 @@ public class DoctorCommand implements Callable<Integer> {
         return false;
     }
 
+    /** Owner bits, i.e. every permission that does *not* expose a file beyond the account that owns it. */
+    private static final Set<PosixFilePermission> OWNER_BITS = Set.of(
+        PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);
+
+    /**
+     * Reports a credential-bearing file readable beyond its owner. ccx creates both of these
+     * owner-only, but a file created by ccx 0.5.0 or earlier, by Claude Code, or by a git checkout
+     * carries the umask default instead — commonly 664. Advisory only: ccx will not chmod a file
+     * the user may have widened deliberately, and failing the check would break CI on upgrade.
+     */
+    private void checkCredentialFileModes(Path dir, PrintWriter out) {
+        reportModeIfWiderThanOwner(dir.resolve(".claude/settings.json"), "MCP credentials (env, headers)", out);
+        reportModeIfWiderThanOwner(dir.resolve(".ccx/context.json"), "profile env values", out);
+    }
+
+    private void reportModeIfWiderThanOwner(Path file, String whatItHolds, PrintWriter out) {
+        if (!Files.exists(file) || !file.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            return;
+        }
+        try {
+            var permissions = Files.getPosixFilePermissions(file);
+            if (permissions.stream().allMatch(OWNER_BITS::contains)) {
+                return;
+            }
+            emit(out, "[WARNING] " + file + " is readable beyond its owner (mode " + octalMode(permissions)
+                + ") and can hold " + whatItHolds + " — run: chmod 600 " + file);
+        } catch (IOException e) {
+            log.debug("could not read permissions path={}", file, e);
+        }
+    }
+
+    /** Renders a permission set the way {@code stat -c %a} would, so the warning is copy-pasteable. */
+    private static String octalMode(Set<PosixFilePermission> permissions) {
+        var bits = 0;
+        for (var permission : PosixFilePermission.values()) {
+            bits = (bits << 1) | (permissions.contains(permission) ? 1 : 0);
+        }
+        return Integer.toOctalString(bits);
+    }
+
     private boolean checkProfileDependencies(Path dir, PrintWriter out) {
         var ccxContext = ccxContextService.read(dir);
         var enabledNames = ccxContext.enabledProfiles().keySet();
@@ -342,6 +386,12 @@ public class DoctorCommand implements Callable<Integer> {
             List<String> missing;
             try {
                 missing = profileService.missingDependencies(enabledName, enabledNames);
+            } catch (ProfileCycleException e) {
+                // doctor is the diagnostic command; a chain it cannot resolve is exactly the kind
+                // of thing the user came here to find out about, so it must not stay in a debug log.
+                emit(out, "[WARNING] profile " + enabledName + " has a circular `extends` chain: " + e.getMessage());
+                hasError = true;
+                continue;
             } catch (RuntimeException e) {
                 log.debug("could not resolve dependencies for profile name={}", enabledName, e);
                 continue;

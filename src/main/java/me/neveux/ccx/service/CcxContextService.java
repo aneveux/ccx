@@ -112,7 +112,8 @@ public class CcxContextService {
         var ccxDir = projectRoot.resolve(".ccx");
         var contextFile = ccxDir.resolve("context.json");
         try {
-            FileUtils.atomicWrite(contextFile, tmp -> mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), ctx));
+            // Owner-only: ProfileSnapshot.env is a Map<String, String> — env values, not just keys.
+            FileUtils.atomicWriteOwnerOnly(contextFile, tmp -> mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), ctx));
             log.debug("context written path={}", contextFile);
         } catch (IOException e) {
             throw new ConfigWriteException("Failed to write context to " + contextFile, e);

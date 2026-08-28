@@ -67,6 +67,19 @@ public class ProfilesCommand implements Runnable {
         spec.commandLine().usage(spec.commandLine().getOut());
     }
 
+    /**
+     * Reports an unresolvable {@code extends} chain on stderr. Every subcommand that resolves a
+     * profile shares this wording: a cycle is a user-fixable mistake in a YAML file, so it needs
+     * the chain named and an instruction, never the stack trace picocli prints for an exception a
+     * command lets escape.
+     *
+     * @param name the profile the user asked for, which may not be the profile that closes the cycle
+     */
+    private static void reportCycle(CommandLine.Model.CommandSpec spec, String name, ProfileCycleException e) {
+        spec.commandLine().getErr().println("Profile '" + name + "' has a circular `extends` chain and cannot be resolved: "
+            + e.getMessage() + ". Edit the profile.yaml files to break the cycle.");
+    }
+
     /** Prints the names of all available profiles from the global ccx config directory, one per line. */
     @Command(name = "list", description = "List configured profiles")
     @RegisterForReflection
@@ -188,6 +201,9 @@ public class ProfilesCommand implements Runnable {
             } catch (ProfileNotFoundException e) {
                 spec.commandLine().getErr().println("Error: " + e.getMessage());
                 return 1;
+            } catch (ProfileCycleException e) {
+                reportCycle(spec, name, e);
+                return 1;
             }
         }
     }
@@ -256,8 +272,7 @@ public class ProfilesCommand implements Runnable {
                 spec.commandLine().getErr().println("Profile '" + name + "' not found. Run `ccx profiles list` to see available profiles, or `ccx profiles new " + name + "` to create one.");
                 return 1;
             } catch (ProfileCycleException e) {
-                spec.commandLine().getErr().println("Profile '" + name + "' has a circular `extends` chain and cannot be resolved: "
-                    + e.getMessage() + ". Edit the profile.yaml files to break the cycle.");
+                reportCycle(spec, name, e);
                 return 1;
             } catch (IOException e) {
                 spec.commandLine().getErr().println("Failed to record profile state (context.json may be corrupted): " + e.getMessage());
@@ -356,6 +371,9 @@ public class ProfilesCommand implements Runnable {
                 return 0;
             } catch (ProfileNotFoundException e) {
                 spec.commandLine().getErr().println("Profile '" + name + "' not found. Run `ccx profiles list` to see available profiles, or `ccx profiles new " + name + "` to create one.");
+                return 1;
+            } catch (ProfileCycleException e) {
+                reportCycle(spec, name, e);
                 return 1;
             } catch (IOException e) {
                 spec.commandLine().getErr().println("Failed to record profile state (context.json may be corrupted): " + e.getMessage());
@@ -510,10 +528,18 @@ public class ProfilesCommand implements Runnable {
                 ProfileDriftState state;
                 if (record == null) {
                     state = ProfileDriftState.DISABLED;
-                } else if (!profileService.missingDependencies(profileName, context.enabledProfiles().keySet()).isEmpty()) {
-                    state = ProfileDriftState.BROKEN;
                 } else {
-                    state = ccxContextService.detectDrift(profileName, record.snapshot(), liveSettings, claudeDir);
+                    // A chain edited into a cycle after enablement is as unusable as a missing
+                    // dependency, so it renders BROKEN — but the reason has to be said out loud,
+                    // and one bad profile must not abort the listing of every other one.
+                    try {
+                        state = !profileService.missingDependencies(profileName, context.enabledProfiles().keySet()).isEmpty()
+                            ? ProfileDriftState.BROKEN
+                            : ccxContextService.detectDrift(profileName, record.snapshot(), liveSettings, claudeDir);
+                    } catch (ProfileCycleException e) {
+                        reportCycle(spec, profileName, e);
+                        state = ProfileDriftState.BROKEN;
+                    }
                 }
                 out.println("[" + state.name() + "] " + profileName);
             });

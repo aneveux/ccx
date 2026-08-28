@@ -113,7 +113,9 @@ public class SettingsService {
         var claudeDir = projectRoot.resolve(".claude");
         var settingsFile = claudeDir.resolve("settings.json");
         try {
-            FileUtils.atomicWrite(settingsFile, tmp -> mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), settings));
+            // Owner-only: MCP `env` and `headers` blocks round-trip through
+            // McpServer.unknownFields, and an MCP env block is the conventional place for a token.
+            FileUtils.atomicWriteOwnerOnly(settingsFile, tmp -> mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), settings));
             log.debug("settings written path={}", settingsFile);
         } catch (IOException e) {
             throw new ConfigWriteException("Failed to write settings to " + settingsFile, e);
