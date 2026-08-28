@@ -72,9 +72,12 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <!-- Quarkus 3.39's BOM manages jline 4.x, whose FFM terminal provider GraalVM
-                 native-image cannot parse (linkToNative polymorphic signature). tamboui 0.4.0
-                 is built against 3.25.1; pin it back until tamboui ships a jline 4 backend. -->
+            <!-- Frozen at 3.25.1, the version tamboui 0.4.0 is built against. Quarkus 3.39's
+                 BOM would bring 4.x, but no version above 3.25.1 builds: GraalVM 25's
+                 points-to analysis dies inside org.jline.terminal.impl.ffm.CLibrary on the
+                 `linkToNative` polymorphic signature. Confirmed on 4.2.1, 4.3.1 and 3.30.16,
+                 so this is not a major-version boundary. .github/dependabot.yml ignores the
+                 dependency outright for the same reason. -->
             <dependency>
                 <groupId>org.jline</groupId>
                 <artifactId>jline</artifactId>
