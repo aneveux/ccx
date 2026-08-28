@@ -130,6 +130,12 @@ public final class FileUtils {
      *
      * <p>Passing no mode is what produces the umask default: the kernel applies the umask to 0666
      * itself, so nothing here needs to know what the umask is.
+     *
+     * <p>A mode passed at creation is filtered through the umask too ({@code open(2)} applies
+     * {@code mode & ~umask}), so reproducing an existing file's mode exactly takes a {@code chmod}
+     * after the fact — under {@code umask 022} the creation attribute alone silently drops the
+     * group-write bit of an existing {@code 664} file. Creating narrow and widening afterwards
+     * keeps the ordering safe: the scratch file is never wider than the mode the target already has.
      */
     private static Path createScratchFile(Path directory, Path target, NewFileMode newFileMode)
             throws IOException {
@@ -139,7 +145,10 @@ public final class FileUtils {
         }
         var existingMode = existingMode(target);
         if (existingMode.isPresent()) {
-            return Files.createFile(scratch, PosixFilePermissions.asFileAttribute(existingMode.get()));
+            var mode = existingMode.get();
+            var created = Files.createFile(scratch, PosixFilePermissions.asFileAttribute(mode));
+            Files.setPosixFilePermissions(created, mode);
+            return created;
         }
         if (newFileMode == NewFileMode.OWNER_ONLY) {
             return Files.createFile(scratch, PosixFilePermissions.asFileAttribute(OWNER_ONLY));
