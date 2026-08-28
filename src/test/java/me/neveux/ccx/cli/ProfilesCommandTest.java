@@ -94,6 +94,14 @@ class ProfilesCommandTest {
         return cl;
     }
 
+    /** Writes a profile whose only content is an `extends` edge, for building cyclic chains. */
+    private void writeProfileWithExtends(String name, String parent) throws Exception {
+        var dir = ccxConfigDir.resolve("profiles/" + name);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("profile.yaml"),
+            "metadata:\n  name: " + name + "\nextends:\n  - " + parent + "\n");
+    }
+
     @Nested
     @DisplayName("profiles list")
     class List_ {
@@ -139,6 +147,28 @@ class ProfilesCommandTest {
             assertThat(output())
                 .as("profiles show with unknown profile name must report the profile was not found")
                 .containsIgnoringCase("not found");
+        }
+
+        @Test
+        @DisplayName("should report a circular extends chain instead of crashing with a stack trace")
+        void show_circularExtends_reportsTheCycle() throws Exception {
+            writeProfileWithExtends("cycle-a", "cycle-b");
+            writeProfileWithExtends("cycle-b", "cycle-a");
+
+            int exit = run("profiles", "show", "cycle-a");
+
+            assertThat(exit)
+                .as("an unresolvable profile must fail the command")
+                .isEqualTo(1);
+            assertThat(output())
+                .as("the user needs the cycle named and a way out, not an uncaught ProfileCycleException")
+                .contains("circular")
+                .contains("cycle-a")
+                .contains("cycle-b");
+            assertThat(output())
+                .as("picocli prints the class name and a stack trace for anything the command lets escape")
+                .doesNotContain("ProfileCycleException")
+                .doesNotContain("\tat me.neveux.ccx");
         }
     }
 
@@ -562,6 +592,30 @@ class ProfilesCommandTest {
             assertThat(capturedOutput())
                 .as("profiles reinstall with unknown profile must report 'not found'")
                 .containsIgnoringCase("not found");
+        }
+
+        @Test
+        @DisplayName("should report a circular extends chain introduced after the profile was enabled")
+        void reinstall_circularExtends_reportsTheCycle() throws Exception {
+            // reinstall exists to restore hand-edited files, so a chain edited into a cycle
+            // after enablement is exactly the case it has to survive.
+            writeProfileWithExtends("java", "cycle-b");
+            writeProfileWithExtends("cycle-b", "java");
+
+            int exit = runFull("profiles", "reinstall", "java", "--project-dir", tempDir.toString());
+
+            assertThat(exit)
+                .as("an unresolvable profile must fail the command")
+                .isEqualTo(1);
+            assertThat(capturedOutput())
+                .as("the user needs the cycle named and a way out, not an uncaught ProfileCycleException")
+                .contains("circular")
+                .contains("java")
+                .contains("cycle-b");
+            assertThat(capturedOutput())
+                .as("picocli prints the class name and a stack trace for anything the command lets escape")
+                .doesNotContain("ProfileCycleException")
+                .doesNotContain("\tat me.neveux.ccx");
         }
     }
 
@@ -1007,6 +1061,34 @@ class ProfilesCommandTest {
             assertThat(capturedOutput())
                 .as("profiles status must report BROKEN for java-functional after its dependency java is disabled")
                 .contains("BROKEN");
+        }
+
+        @Test
+        @DisplayName("should mark a profile with a circular extends chain BROKEN and keep listing the rest")
+        void status_circularExtends_reportsBrokenAndKeepsListing() throws Exception {
+            runFull("profiles", "enable", "java", "--project-dir", tempDir.toString());
+            writeProfileWithExtends("java", "cycle-b");
+            writeProfileWithExtends("cycle-b", "java");
+
+            int exit = runFull("profiles", "status", "--project-dir", tempDir.toString());
+
+            assertThat(exit)
+                .as("status reports rather than judges — a BROKEN profile already leaves the exit code at 0")
+                .isZero();
+            assertThat(capturedOutput())
+                .as("a chain that cannot be resolved is as unusable as a missing dependency")
+                .contains("[BROKEN] java");
+            assertThat(capturedOutput())
+                .as("BROKEN alone does not distinguish a cycle from a missing dependency")
+                .contains("circular");
+            assertThat(capturedOutput())
+                .as("one cyclic profile must not abort the listing of every other profile")
+                .contains("go")
+                .contains("bash");
+            assertThat(capturedOutput())
+                .as("picocli prints the class name and a stack trace for anything the command lets escape")
+                .doesNotContain("ProfileCycleException")
+                .doesNotContain("\tat me.neveux.ccx");
         }
     }
 }

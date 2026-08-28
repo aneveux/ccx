@@ -13,7 +13,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@DisplayName("FileUtils.atomicWrite")
+@DisplayName("FileUtils")
 class FileUtilsTest {
 
     @TempDir
@@ -129,6 +129,50 @@ class FileUtilsTest {
             assertThat(stream.map(path -> path.getFileName().toString()))
                 .as("the umask probe must be removed")
                 .noneMatch(name -> name.startsWith(".ccx-mode-probe"));
+        }
+    }
+
+    @Test
+    @DisplayName("should create a new secret-bearing file owner-only regardless of the umask")
+    void atomicWriteOwnerOnly_newFileIsOwnerOnly() throws Exception {
+        assumePosix();
+        var target = tempDir.resolve("settings.json");
+
+        FileUtils.atomicWriteOwnerOnly(target, tmp -> Files.writeString(tmp, "{\"env\":{\"TOKEN\":\"s3cret\"}}"));
+
+        assertThat(Files.getPosixFilePermissions(target))
+            .as("a file that can carry MCP credentials must not be created group- or world-readable")
+            .containsExactlyInAnyOrder(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+    }
+
+    @Test
+    @DisplayName("should leave an existing wider mode alone rather than silently tightening it")
+    void atomicWriteOwnerOnly_preservesExistingWiderMode() throws Exception {
+        assumePosix();
+        var target = tempDir.resolve("settings.json");
+        Files.writeString(target, "old");
+        var groupWritable = PosixFilePermissions.fromString("rw-rw-r--");
+        Files.setPosixFilePermissions(target, groupWritable);
+
+        FileUtils.atomicWriteOwnerOnly(target, tmp -> Files.writeString(tmp, "new"));
+
+        assertThat(Files.getPosixFilePermissions(target))
+            .as("ccx reports a too-wide existing file via doctor; it never chmods one behind the user's back")
+            .isEqualTo(groupWritable);
+        assertThat(Files.readString(target)).isEqualTo("new");
+    }
+
+    @Test
+    @DisplayName("should leave no scratch file behind after an owner-only write")
+    void atomicWriteOwnerOnly_leavesNoScratchFile() throws Exception {
+        assumePosix();
+
+        FileUtils.atomicWriteOwnerOnly(tempDir.resolve("settings.json"), tmp -> Files.writeString(tmp, "{}"));
+
+        try (var stream = Files.list(tempDir)) {
+            assertThat(stream.map(path -> path.getFileName().toString()))
+                .as("only the finished file may remain")
+                .containsExactly("settings.json");
         }
     }
 

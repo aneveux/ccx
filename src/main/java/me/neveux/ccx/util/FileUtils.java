@@ -55,6 +55,11 @@ public final class FileUtils {
      * can plant a symlink there — a checked-out repository, another process — redirect the write
      * to an arbitrary file, and would also make two concurrent writes to the same target collide.
      */
+    // TDD stub — plan 051 task 4 replaces this with the owner-only creation mode.
+    public static void atomicWriteOwnerOnly(Path target, ThrowingConsumer<Path> writer) throws IOException {
+        atomicWrite(target, writer);
+    }
+
     public static void atomicWrite(Path target, ThrowingConsumer<Path> writer) throws IOException {
         var parent = target.getParent();
         if (parent != null) {

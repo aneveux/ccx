@@ -15,6 +15,7 @@ import me.neveux.ccx.service.HomeIsolatedServices;
 import me.neveux.ccx.service.PluginMapService;
 import me.neveux.ccx.service.ProfileService;
 import me.neveux.ccx.service.SettingsService;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -27,6 +28,8 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 import java.util.Map;
 
@@ -587,6 +590,128 @@ class DoctorCommandTest {
             assertThat(result.exitCode())
                 .as("a fully installed project must exit 0")
                 .isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("when a profile's extends chain is circular")
+    class WhenCyclicProfile {
+
+        @TempDir
+        Path ccxConfigDir;
+
+        @Test
+        @DisplayName("should report [WARNING] naming the cycle instead of silently skipping the profile")
+        void doctor_reportsCircularExtendsChain() throws Exception {
+            writeProfileWithExtends("cycle-a", "cycle-b");
+            writeProfileWithExtends("cycle-b", "cycle-a");
+
+            var ccxDir = tempDir.resolve(".ccx");
+            Files.createDirectories(ccxDir);
+            Files.writeString(ccxDir.resolve("context.json"), """
+                {"version":"1","enabledProfiles":{"cycle-a":{"enabledAt":"2024-01-15T10:00:00Z",
+                "snapshot":{"plugins":[],"rules":[],"permissionsAllow":[],"permissionsDeny":[]}}}}
+                """);
+
+            var yamlMapper = new ObjectMapper(new YAMLFactory());
+            yamlMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+            yamlMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
+            var profileService = new ProfileService(yamlMapper, new CcxConfigService(ccxConfigDir));
+            var factory = new TestCommandFactory(
+                settingsService, profileService, isolatedPluginMapService(), new ClaudeMdService(),
+                new me.neveux.ccx.service.SkillsService(settingsService, new me.neveux.ccx.service.ClaudeMarketplaceRegistryService()),
+                null, new CcxContextService(),
+                new CcxConfigService(ccxConfigDir));
+            var cl = new CommandLine(new CcxCommand(), factory);
+            var out = new ByteArrayOutputStream();
+            cl.setOut(new PrintWriter(out, true));
+
+            var exit = cl.execute("doctor", "--project-dir", tempDir.toString());
+
+            assertThat(out.toString())
+                .as("doctor is the diagnostic command — a chain it cannot resolve must not be swallowed into a debug log")
+                .contains("[WARNING]")
+                .contains("cycle-a")
+                .contains("circular");
+            assertThat(exit)
+                .as("an unresolvable chain is at least as broken as a missing dependency, which already exits non-zero")
+                .isNotZero();
+        }
+
+        private void writeProfileWithExtends(String name, String parent) throws IOException {
+            var dir = ccxConfigDir.resolve("profiles/" + name);
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("profile.yaml"),
+                "metadata:\n  name: " + name + "\nextends:\n  - " + parent + "\n");
+        }
+    }
+
+    @Nested
+    @DisplayName("when a credential-bearing file is readable beyond its owner")
+    class WhenSecretFileIsTooWide {
+
+        @Test
+        @DisplayName("should report [WARNING] with the mode and the chmod for a group-readable settings.json")
+        void doctor_reportsWideSettingsFile() throws Exception {
+            assumePosix();
+            settingsService.write(new Settings(), tempDir);
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.setPosixFilePermissions(settingsFile, PosixFilePermissions.fromString("rw-rw-r--"));
+
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
+
+            assertThat(result.output())
+                .as("settings.json round-trips MCP env values, so a mode wider than the owner is worth reporting")
+                .contains("[WARNING]")
+                .contains("settings.json")
+                .contains("664")
+                .contains("chmod 600");
+            assertThat(result.exitCode())
+                .as("a pre-existing wide mode is advisory — failing here would break CI for everyone on 0.5.0")
+                .isZero();
+        }
+
+        @Test
+        @DisplayName("should report a group-readable .ccx/context.json too")
+        void doctor_reportsWideContextFile() throws Exception {
+            assumePosix();
+            var ccxDir = tempDir.resolve(".ccx");
+            Files.createDirectories(ccxDir);
+            var contextFile = ccxDir.resolve("context.json");
+            Files.writeString(contextFile, "{\"version\":\"1\",\"enabledProfiles\":{}}");
+            Files.setPosixFilePermissions(contextFile, PosixFilePermissions.fromString("rw-r--r--"));
+
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
+
+            assertThat(result.output())
+                .as("context.json stores ProfileSnapshot.env as values, not just keys")
+                .contains("[WARNING]")
+                .contains("context.json")
+                .contains("chmod 600");
+        }
+
+        @Test
+        @DisplayName("should stay quiet for an owner-only settings.json")
+        void doctor_staysQuietForOwnerOnlySettings() throws Exception {
+            assumePosix();
+            settingsService.write(new Settings(), tempDir);
+            var settingsFile = tempDir.resolve(".claude/settings.json");
+            Files.setPosixFilePermissions(settingsFile, PosixFilePermissions.fromString("rw-------"));
+
+            var result = run("doctor", "--project-dir", tempDir.toString(),
+                "--global-dir", isolatedGlobalDir.toString());
+
+            assertThat(result.output())
+                .as("a correctly-scoped file must not produce a permanent nag")
+                .doesNotContain("chmod 600");
+        }
+
+        private void assumePosix() {
+            Assumptions.assumeTrue(
+                Files.getFileAttributeView(tempDir, PosixFileAttributeView.class) != null,
+                "filesystem has no POSIX permission support");
         }
     }
 
